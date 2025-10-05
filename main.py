@@ -106,7 +106,7 @@ def check_alerts_loop():
 
         # Відбій — якщо немає жодної активної тривоги
         if not new_active_districts and last_alert_active:
-            send_telegram_message(f"✅ Тривога відсутня у {REGION_NAME}", CLEAR_IMAGE)
+            send_telegram_message(f"✅ Відбій повітряної тривоги у {REGION_NAME}", CLEAR_IMAGE)
 
         active_districts = new_active_districts
         last_alert_active = bool(active_districts)
@@ -121,7 +121,7 @@ async def webhook(request: Request):
     text = message.get("text", "")
     chat_id = message.get("chat", {}).get("id")
 
-    if text.strip() == "***що по області?":
+    if text.strip() == "Що по області?":
         if not active_districts:
             send_telegram_message("Все чисто!", chat_id=chat_id)
         else:
