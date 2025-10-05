@@ -19,6 +19,7 @@ REGION_NAME = "Київська область"
 # Картинки
 ALARM_IMAGE_DEFAULT = "images/alarm.jpg"
 CLEAR_IMAGE = "images/clear.jpg"
+SAFETY_IMAGE = "images/saefty.jpg"
 
 # Райони Київської області
 DISTRICTS = [
@@ -113,7 +114,7 @@ def check_alerts_loop():
 
         time.sleep(25)
 
-# Обробка команди "***що по області?"
+# Обробка команди "Що по області?"
 @app.post("/webhook")
 async def webhook(request: Request):
     data = await request.json()
@@ -123,7 +124,9 @@ async def webhook(request: Request):
 
     if text.strip() == "Що по області?":
         if not active_districts:
-            send_telegram_message("Все чисто!", chat_id=chat_id)
+            # Відповідь "Все чисто!" з картинкою saefty.jpg
+            image_path = SAFETY_IMAGE if os.path.exists(SAFETY_IMAGE) else CLEAR_IMAGE
+            send_telegram_message("Все чисто!", image_path, chat_id=chat_id)
         else:
             districts_text = ", ".join(sorted(active_districts))
             send_telegram_message(f"Тривожаться такі райони: {districts_text}", chat_id=chat_id)
