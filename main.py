@@ -12,33 +12,41 @@ load_dotenv()
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-ALERTS_API_TOKEN = os.getenv("ALERTS_API_TOKEN")  # токен alerts.in.ua
+ALERTS_API_TOKEN = os.getenv("ALERTS_API_TOKEN")
 
 REGION_NAME = "Київська область"
 
 # Картинки
 ALARM_IMAGE_DEFAULT = "images/Alarm.jpg"
 CLEAR_IMAGE = "images/Clear.jpg"
-SAFETY_IMAGE = "images/Saefty.jpg"  # залишаємо опечатку для сумісності
-
-# Відповідні картинки по районах (якщо немає файлу, буде дефолт)
-DISTRICT_IMAGES = {
-    "Бориспільський": "images/alarm_boryspil.jpg",
-    "Білоцерківський": "images/alarm_bila_tserkva.jpg",
-    "Броварський": "images/alarm_brovary.jpg",
-    "Бучанський": "images/alarm_bucha.jpg",
-    "Вишгородський": "images/alarm_vyshhorod.jpg",
-    "Обухівський": "images/alarm_obukhiv.jpg",
-    "Фастівський": "images/alarm_fastiv.jpg"
-}
+SAFETY_IMAGE = "images/Saefty.jpg"
 
 TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
 
 app = FastAPI()
 
-# Стан останньої тривоги
 last_alert_active = False
 active_districts = set()
+DISTRICTS = []  # автоматично заповниться з API
+
+def fetch_all_districts():
+    """Отримати всі райони Київської області з API"""
+    url = "https://alerts.in.ua/api/v1/alerts/active.json"
+    headers = {"Authorization": f"Bearer {ALERTS_API_TOKEN}"}
+    try:
+        resp = requests.get(url, headers=headers, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+        districts_set = set()
+        for alert in data.get("alerts", []):
+            if alert.get("oblast") == REGION_NAME:
+                district = alert.get("district")
+                if district:
+                    districts_set.add(district)
+        return sorted(list(districts_set))
+    except Exception as e:
+        print("Помилка отримання районів:", e)
+        return []
 
 def fetch_alerts():
     """Отримати активні тривоги з alerts.in.ua"""
@@ -48,12 +56,12 @@ def fetch_alerts():
         resp = requests.get(url, headers=headers, timeout=10)
         resp.raise_for_status()
         data = resp.json()
-        # Фільтруємо лише Київську область
-        kyiv_alerts = [
-            alert for alert in data
-            if alert.get("oblast") == REGION_NAME
-        ]
-        return kyiv_alerts
+        alerts_list = []
+        for alert in data.get("alerts", []):
+            oblast = alert.get("oblast")
+            district = alert.get("district")
+            alerts_list.append({"oblast": oblast, "district": district})
+        return alerts_list
     except Exception as e:
         print("Помилка при запиті alerts.in.ua:", e)
         return []
@@ -63,43 +71,42 @@ def send_telegram_message(text, image_path=None, chat_id=None):
         chat_id = TELEGRAM_CHAT_ID
     if image_path:
         if not os.path.exists(image_path):
-            print(f"Файл не знайдено: {image_path}, використовуємо дефолт")
             image_path = ALARM_IMAGE_DEFAULT
         try:
             with open(image_path, "rb") as f:
                 files = {"photo": f}
                 data = {"chat_id": chat_id, "caption": text}
-                resp = requests.post(f"{TELEGRAM_API_URL}/sendPhoto", data=data, files=files)
-                resp.raise_for_status()
+                requests.post(f"{TELEGRAM_API_URL}/sendPhoto", data=data, files=files)
         except Exception as e:
             print("Помилка відправки фото в Telegram:", e)
     else:
         try:
             data = {"chat_id": chat_id, "text": text}
-            resp = requests.post(f"{TELEGRAM_API_URL}/sendMessage", data=data)
-            resp.raise_for_status()
+            requests.post(f"{TELEGRAM_API_URL}/sendMessage", data=data)
         except Exception as e:
             print("Помилка відправки тексту в Telegram:", e)
 
 def check_alerts_loop():
-    """Фоновий цикл опитування для районів Київської області"""
-    global last_alert_active, active_districts
+    global last_alert_active, active_districts, DISTRICTS
     while True:
+        if not DISTRICTS:
+            DISTRICTS = fetch_all_districts()
+
         alerts = fetch_alerts()
         new_active_districts = set()
 
         for alert in alerts:
-            district = alert.get("region")
-            if district:
-                new_active_districts.add(district)
+            if alert.get("oblast") == REGION_NAME:
+                district = alert.get("district")
+                if district in DISTRICTS:
+                    new_active_districts.add(district)
 
-        # Надсилання тривог по нових районах
+        # Нові тривоги
         for district in new_active_districts - active_districts:
-            text = f"Увага! У {district} районі оголошено повітряну тривогу! Будьте обережні!"
-            image_path = DISTRICT_IMAGES.get(district, ALARM_IMAGE_DEFAULT)
-            send_telegram_message(text, image_path)
+            text = f"Увага! У {district} районі оголошено повітряну тривогу!"
+            send_telegram_message(text)
 
-        # Відбій — якщо немає жодної активної тривоги
+        # Відбій
         if not new_active_districts and last_alert_active:
             send_telegram_message(f"✅ Відбій повітряної тривоги у {REGION_NAME}", CLEAR_IMAGE)
 
@@ -108,7 +115,6 @@ def check_alerts_loop():
 
         time.sleep(25)
 
-# Обробка команди "Що по області?"
 @app.post("/webhook")
 async def webhook(request: Request):
     data = await request.json()
@@ -130,26 +136,15 @@ async def webhook(request: Request):
 def root():
     return PlainTextResponse("Bot is running!")
 
-# Перевірка файлів у папці images
-@app.get("/check_images")
-def check_images():
-    folder = "images"
-    if not os.path.exists(folder):
-        return JSONResponse({"error": "Папка images не знайдена"}, status_code=404)
-    files = os.listdir(folder)
-    return {"files_in_images_folder": files}
-
-# Самопінгування
 def self_ping_loop():
     port = int(os.getenv("PORT", 10000))
     url = f"http://localhost:{port}/"
     while True:
         try:
             requests.get(url, timeout=5)
-            print("Self-ping успішний")
-        except Exception as e:
-            print("Self-ping помилка:", e)
-        time.sleep(300)  # кожні 5 хвилин
+        except:
+            pass
+        time.sleep(300)
 
 if __name__ == "__main__":
     threading.Thread(target=check_alerts_loop, daemon=True).start()
