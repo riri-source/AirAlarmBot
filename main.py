@@ -1,4 +1,3 @@
-# main.py
 import os
 import time
 import threading
@@ -11,16 +10,18 @@ load_dotenv()
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-ALERTS_API_TOKEN = os.getenv("ALERTS_API_TOKEN")  # токен alerts.in.ua
+ALERTS_API_TOKEN = os.getenv("ALERTS_API_TOKEN")
 
 REGION_NAME = "Київська область"
 
 TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
 
-# Райони Київської області (можна додавати всі)
+# Повний список районів Київської області
 DISTRICTS = [
-    "Бориспільський", "Білоцерківський", "Броварський",
-    "Бучанський", "Вишгородський", "Обухівський", "Фастівський"
+    "Бориспільський", "Білоцерківський", "Броварський", "Бучанський",
+    "Вишгородський", "Обухівський", "Фастівський", "Ставищенський",
+    "Сквирський", "Софіївський", "Тетіївський", "Таращанський",
+    "Яготинський"
 ]
 
 # Стан останньої тривоги
@@ -66,9 +67,9 @@ def check_alerts_loop():
 
         # Надсилання повідомлень по нових районах
         for district in new_active_districts - active_districts:
-            send_telegram_message(f"Увага! Тривога у {district} районі!")
+            send_telegram_message(f"⚠️ Тривога у {district} районі!")
 
-        # Відбій
+        # Відбій тривоги
         if not new_active_districts and last_alert_active:
             send_telegram_message(f"✅ Відбій тривоги у {REGION_NAME}")
 
