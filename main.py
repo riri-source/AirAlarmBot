@@ -1,10 +1,12 @@
+# main.py
 import os
 import time
 import threading
 import requests
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import PlainTextResponse, JSONResponse
+import uvicorn
 
 load_dotenv()
 
@@ -14,24 +16,21 @@ ALERTS_API_TOKEN = os.getenv("ALERTS_API_TOKEN")
 
 REGION_NAME = "Київська область"
 
+# Картинки
+ALARM_IMAGE_DEFAULT = "images/Alarm.jpg"
+CLEAR_IMAGE = "images/Clear.jpg"
+SAFETY_IMAGE = "images/Saefty.jpg"
+
 TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
-
-# Повний список районів Київської області
-DISTRICTS = [
-    "Бориспільський", "Білоцерківський", "Броварський", "Бучанський",
-    "Вишгородський", "Обухівський", "Фастівський", "Ставищенський",
-    "Сквирський", "Софіївський", "Тетіївський", "Таращанський",
-    "Яготинський"
-]
-
-# Стан останньої тривоги
-last_alert_active = False
-active_districts = set()
 
 app = FastAPI()
 
+# Стан останньої тривоги
+last_alert_active = False
+active_districts = set()  # активні райони
+
 def fetch_alerts():
-    """Отримати активні тривоги з alerts.in.ua"""
+    """Отримати активні тривоги через API alerts.in.ua"""
     url = f"https://api.alerts.in.ua/v1/alerts/active.json?token={ALERTS_API_TOKEN}"
     try:
         resp = requests.get(url, timeout=10)
@@ -42,18 +41,31 @@ def fetch_alerts():
         print("Помилка при запиті alerts.in.ua:", e)
         return []
 
-def send_telegram_message(text, chat_id=None):
+def send_telegram_message(text, image_path=None, chat_id=None):
     if chat_id is None:
         chat_id = TELEGRAM_CHAT_ID
-    try:
-        data = {"chat_id": chat_id, "text": text}
-        resp = requests.post(f"{TELEGRAM_API_URL}/sendMessage", data=data)
-        resp.raise_for_status()
-    except Exception as e:
-        print("Помилка відправки повідомлення в Telegram:", e)
+    if image_path:
+        if not os.path.exists(image_path):
+            print(f"Файл не знайдено: {image_path}, використовуємо дефолт")
+            image_path = ALARM_IMAGE_DEFAULT
+        try:
+            with open(image_path, "rb") as f:
+                files = {"photo": f}
+                data = {"chat_id": chat_id, "caption": text}
+                resp = requests.post(f"{TELEGRAM_API_URL}/sendPhoto", data=data, files=files)
+                resp.raise_for_status()
+        except Exception as e:
+            print("Помилка відправки фото в Telegram:", e)
+    else:
+        try:
+            data = {"chat_id": chat_id, "text": text}
+            resp = requests.post(f"{TELEGRAM_API_URL}/sendMessage", data=data)
+            resp.raise_for_status()
+        except Exception as e:
+            print("Помилка відправки тексту в Telegram:", e)
 
 def check_alerts_loop():
-    """Фоновий цикл опитування тривог"""
+    """Фоновий цикл опитування для Київської області"""
     global last_alert_active, active_districts
     while True:
         alerts = fetch_alerts()
@@ -61,22 +73,23 @@ def check_alerts_loop():
 
         for alert in alerts:
             if alert.get("location_oblast") == REGION_NAME:
-                raion = alert.get("location_raion")
-                if raion in DISTRICTS:
-                    new_active_districts.add(raion)
+                raion = alert.get("location_raion") or "Уся область"
+                new_active_districts.add(raion)
 
-        # Надсилання повідомлень по нових районах
-        for district in new_active_districts - active_districts:
-            send_telegram_message(f"⚠️ Тривога у {district} районі!")
+        # Надсилання тривог по нових районах
+        for raion in new_active_districts - active_districts:
+            text = f"Увага! Повітряна тривога у {raion}!"
+            send_telegram_message(text, ALARM_IMAGE_DEFAULT)
 
-        # Відбій тривоги
+        # Відбій — якщо немає жодної активної тривоги
         if not new_active_districts and last_alert_active:
-            send_telegram_message(f"✅ Відбій тривоги у {REGION_NAME}")
+            send_telegram_message(f"✅ Відбій повітряної тривоги у {REGION_NAME}", CLEAR_IMAGE)
 
         active_districts = new_active_districts
         last_alert_active = bool(active_districts)
         time.sleep(25)
 
+# Обробка команди "Що по області?"
 @app.post("/webhook")
 async def webhook(request: Request):
     data = await request.json()
@@ -86,10 +99,11 @@ async def webhook(request: Request):
 
     if text.strip() == "Що по області?":
         if not active_districts:
-            send_telegram_message("Все чисто! Немає активних тривог.", chat_id=chat_id)
+            image_path = SAFETY_IMAGE if os.path.exists(SAFETY_IMAGE) else CLEAR_IMAGE
+            send_telegram_message("Все чисто!", image_path, chat_id=chat_id)
         else:
             districts_text = ", ".join(sorted(active_districts))
-            send_telegram_message(f"Тривожаться райони: {districts_text}", chat_id=chat_id)
+            send_telegram_message(f"Тривожаться такі райони: {districts_text}", chat_id=chat_id)
 
     return {"ok": True}
 
@@ -97,8 +111,19 @@ async def webhook(request: Request):
 def root():
     return PlainTextResponse("Bot is running!")
 
+# Самопінгування для Render чи іншого хостингу
+def self_ping_loop():
+    port = int(os.getenv("PORT", 10000))
+    url = f"http://localhost:{port}/"
+    while True:
+        try:
+            requests.get(url, timeout=5)
+        except Exception:
+            pass
+        time.sleep(300)  # кожні 5 хвилин
+
 if __name__ == "__main__":
     threading.Thread(target=check_alerts_loop, daemon=True).start()
-    import uvicorn
+    threading.Thread(target=self_ping_loop, daemon=True).start()
     port = int(os.getenv("PORT", 10000))
     uvicorn.run(app, host="0.0.0.0", port=port)
