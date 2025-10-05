@@ -5,7 +5,7 @@ import threading
 import requests
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import PlainTextResponse, JSONResponse
 import uvicorn
 
 load_dotenv()
@@ -17,9 +17,9 @@ ALERTS_API_TOKEN = os.getenv("ALERTS_API_TOKEN")  # якщо треба
 REGION_NAME = "Київська область"
 
 # Картинки
-ALARM_IMAGE_DEFAULT = "images/alarm.jpg"
-CLEAR_IMAGE = "images/clear.jpg"
-SAFETY_IMAGE = "images/saefty.jpg"  # залишаємо опечатку
+ALARM_IMAGE_DEFAULT = "images/Alarm.jpg"
+CLEAR_IMAGE = "images/Clear.jpg"
+SAFETY_IMAGE = "images/Saefty.jpg"  # залишаємо опечатку
 
 # Райони Київської області
 DISTRICTS = [
@@ -67,8 +67,8 @@ def send_telegram_message(text, image_path=None, chat_id=None):
     if chat_id is None:
         chat_id = TELEGRAM_CHAT_ID
     if image_path:
-        # Перевірка наявності файлу
         if not os.path.exists(image_path):
+            print(f"Файл не знайдено: {image_path}, використовуємо дефолт")
             image_path = ALARM_IMAGE_DEFAULT
         try:
             with open(image_path, "rb") as f:
@@ -79,8 +79,8 @@ def send_telegram_message(text, image_path=None, chat_id=None):
         except Exception as e:
             print("Помилка відправки фото в Telegram:", e)
     else:
-        data = {"chat_id": chat_id, "text": text}
         try:
+            data = {"chat_id": chat_id, "text": text}
             resp = requests.post(f"{TELEGRAM_API_URL}/sendMessage", data=data)
             resp.raise_for_status()
         except Exception as e:
@@ -93,7 +93,6 @@ def check_alerts_loop():
         alerts = fetch_alerts()
         new_active_districts = set()
 
-        # Перевіряємо тривоги по районах
         for alert in alerts:
             if alert.get("location_oblast") == REGION_NAME:
                 district = alert.get("location_district")
@@ -134,26 +133,33 @@ async def webhook(request: Request):
 
     return {"ok": True}
 
-# Endpoint для самопінгування
 @app.get("/")
 def root():
     return PlainTextResponse("Bot is running!")
 
+# Новий ендпоінт для перевірки файлів
+@app.get("/check_images")
+def check_images():
+    folder = "images"
+    if not os.path.exists(folder):
+        return JSONResponse({"error": "Папка images не знайдена"}, status_code=404)
+    files = os.listdir(folder)
+    return {"files_in_images_folder": files}
+
+# Самопінгування
 def self_ping_loop():
-    """Цикл самопінгування кожні 10 хвилин"""
-    url = f"http://127.0.0.1:{os.getenv('PORT', 10000)}/"
+    port = int(os.getenv("PORT", 10000))
+    url = f"http://localhost:{port}/"
     while True:
         try:
             requests.get(url, timeout=5)
-        except:
-            pass
-        time.sleep(600)  # 10 хвилин
+            print("Self-ping успішний")
+        except Exception as e:
+            print("Self-ping помилка:", e)
+        time.sleep(300)  # кожні 5 хвилин
 
 if __name__ == "__main__":
-    # Фоновий цикл опитування тривог
     threading.Thread(target=check_alerts_loop, daemon=True).start()
-    # Фоновий цикл самопінгування
     threading.Thread(target=self_ping_loop, daemon=True).start()
-    # Запуск FastAPI
     port = int(os.getenv("PORT", 10000))
     uvicorn.run(app, host="0.0.0.0", port=port)
