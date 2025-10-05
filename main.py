@@ -1,62 +1,93 @@
-import requests
-import time
+# main.py
 import os
+import time
+import threading
+import requests
 from dotenv import load_dotenv
+from fastapi import FastAPI
+from fastapi.responses import PlainTextResponse
+import uvicorn
 
-# Завантаження змінних середовища
 load_dotenv()
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+ALERTS_API_TOKEN = os.getenv("ALERTS_API_TOKEN")  # якщо треба для авторизації API
 
-ALERTS_API = "https://alerts.in.ua/api/alerts?limit=100"
+# Київська область
+REGION_NAME = "Київська область"
 
-CHECK_INTERVAL = 25  # секунд
+# Зображення для тривоги / без тривоги
+ALARM_IMAGE = "images/alarm.jpg"
+CLEAR_IMAGE = "images/clear.jpg"
 
-# Для відстеження останнього стану тривоги
+# Telegram API
+TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
+
+# FastAPI для Render
+app = FastAPI()
+
+# Стан останньої тривоги
 last_alert_active = False
 
-def get_alerts():
+def fetch_alerts():
+    """Отримати тривоги з alerts.in.ua"""
+    url = "https://alerts.in.ua/api/alerts"
     try:
-        response = requests.get(ALERTS_API)
-        response.raise_for_status()
-        data = response.json()
+        resp = requests.get(url, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
         return data.get("alerts", [])
     except Exception as e:
-        print(f"Помилка при отриманні даних: {e}")
+        print("Помилка при запиті alerts.in.ua:", e)
         return []
 
 def send_telegram_message(text, image_path=None):
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto" if image_path else f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    
+    """Відправка повідомлення в Telegram"""
     if image_path:
-        with open(image_path, "rb") as img:
-            files = {"photo": img}
-            data = {"chat_id": TELEGRAM_CHAT_ID, "caption": text}
-            requests.post(url, files=files, data=data)
+        files = {"photo": open(image_path, "rb")}
+        data = {"chat_id": TELEGRAM_CHAT_ID, "caption": text}
+        try:
+            resp = requests.post(f"{TELEGRAM_API_URL}/sendPhoto", data=data, files=files)
+            resp.raise_for_status()
+        except Exception as e:
+            print("Помилка відправки фото в Telegram:", e)
     else:
         data = {"chat_id": TELEGRAM_CHAT_ID, "text": text}
-        requests.post(url, data=data)
+        try:
+            resp = requests.post(f"{TELEGRAM_API_URL}/sendMessage", data=data)
+            resp.raise_for_status()
+        except Exception as e:
+            print("Помилка відправки тексту в Telegram:", e)
 
-def check_alerts():
+def check_alerts_loop():
+    """Фоновий цикл опитування"""
     global last_alert_active
-    alerts = get_alerts()
+    while True:
+        alerts = fetch_alerts()
+        active_alert = False
+        for alert in alerts:
+            if alert.get("location_oblast") == REGION_NAME:
+                active_alert = True
+                break
 
-    # Фільтруємо тільки Київську область
-    kyiv_alerts = [a for a in alerts if a.get("location_oblast") == "Київська область"]
+        if active_alert != last_alert_active:
+            if active_alert:
+                send_telegram_message(f"❗️ ТРИВОГА у {REGION_NAME}!", ALARM_IMAGE)
+            else:
+                send_telegram_message(f"✅ Тривога відсутня у {REGION_NAME}", CLEAR_IMAGE)
+            last_alert_active = active_alert
 
-    # Перевіряємо, чи є активна тривога
-    active_alerts = [a for a in kyiv_alerts if a.get("finished_at") is None]
+        time.sleep(25)
 
-    if active_alerts and not last_alert_active:
-        # Є нова активна тривога
-        send_telegram_message("‼️ Увага! Повітряна тривога у Київській області!", "images/alarm.jpg")
-        last_alert_active = True
-    elif not active_alerts and last_alert_active:
-        # Тривога завершилась
-        send_telegram_message("✅ Тривога завершилась у Київській області.", "images/clear.jpg")
-        last_alert_active = False
+# Endpoint для Render
+@app.get("/")
+def root():
+    return PlainTextResponse("Bot is running!")
 
 if __name__ == "__main__":
-    while True:
-        check_alerts()
-        time.sleep(CHECK_INTERVAL)
+    # Запуск фонової задачі
+    threading.Thread(target=check_alerts_loop, daemon=True).start()
+    # Запуск FastAPI
+    port = int(os.getenv("PORT", 10000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
