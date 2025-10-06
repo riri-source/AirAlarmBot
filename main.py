@@ -56,7 +56,10 @@ async def oblast_alerts(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
 
         if not region_alerts:
-            await update.message.reply_text(f"✅ У {REGION} зараз тихо.")
+            await update.message.reply_text(f"✅ {REGION} - зараз все чисто!")
+            # Відправка картинки Saefty.jpg
+            with open("images/Saefty.jpg", "rb") as photo:
+                await update.message.reply_photo(photo=photo)
             return
 
         text = f"🚨 *Активні тривоги у {REGION}:*\n"
