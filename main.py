@@ -8,16 +8,6 @@ import aiohttp
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
-# ===== Словничок типів тривог =====
-ALERT_TYPE_UA = {
-    "air_raid": "Повітряна тривога!",
-    "artillery_shelling": "Артилерійський обстріл!",
-    "urban_fights": "Бої в населеному пункті!",
-    "chemical_threat": "Хімічна небезпека!",
-    "nuclear_threat": "Радіаційна небезпека!",
-    "unknown": "Невідома тривога!"
-}
-
 # ===== Фейковий HTTP сервер для Render =====
 class StubHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -47,6 +37,14 @@ if not TELEGRAM_TOKEN or not ALERTS_TOKEN or not CHAT_ID:
 
 API_URL = "https://api.alerts.in.ua/v1/alerts/active.json"
 
+# ===== Словник типів тривог =====
+ALERT_TYPES_UA = {
+    "air_raid": "Повітряна тривога!",
+    "chemical": "Хімічна тривога",
+    "radiation": "Радіаційна тривога",
+    "other": "Інша тривога",
+}
+
 # ===== Хендлери =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
@@ -67,22 +65,26 @@ async def oblast_alerts(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if not region_alerts:
             await update.message.reply_text(f"✅ {REGION} - зараз все чисто!")
-            with open("images/Saefty.jpg", "rb") as photo:
-                await update.message.reply_photo(photo=photo)
+            try:
+                with open("images/Saefty.jpg", "rb") as photo:
+                    await update.message.reply_photo(photo=photo)
+            except Exception as e:
+                logging.error(f"Помилка при відправці картинки: {e}")
             return
 
         text = f"🚨 *Активні тривоги у {REGION}:*\n"
         for alert in region_alerts:
             raion = alert.get("location_title", "Невідомий район")
-            alert_type = ALERT_TYPE_UA.get(alert.get("alert_type", "unknown"), "Невідома тривога!")
-            text += f"• {raion} — {alert_type}\n"
+            alert_type = alert.get("alert_type", "невідомо")
+            alert_type_ua = ALERT_TYPES_UA.get(alert_type, alert_type)
+            text += f"• {raion} — {alert_type_ua}\n"
 
         await update.message.reply_markdown(text)
 
     except Exception as e:
+        logging.error(f"Помилка при запиті до API для області: {e}")
         await update.message.reply_text(f"Помилка отримання даних: {e}")
 
-# ===== Тестовий запит: "Як там Крим?" =====
 async def krym_alerts(update: Update, context: ContextTypes.DEFAULT_TYPE):
     headers = {"Authorization": f"Bearer {ALERTS_TOKEN}"}
     try:
@@ -90,26 +92,27 @@ async def krym_alerts(update: Update, context: ContextTypes.DEFAULT_TYPE):
             async with session.get(API_URL, headers=headers, timeout=10) as resp:
                 data = await resp.json()
 
-        krym_alerts = [
+        krym_alerts_list = [
             alert for alert in data.get("alerts", [])
             if alert.get("location_oblast") == "Автономна Республіка Крим"
         ]
 
-        if krym_alerts:
+        if krym_alerts_list:
             text = "🚨 У Криму зафіксована тривога!\n"
-            for alert in krym_alerts:
+            for alert in krym_alerts_list:
                 raion = alert.get("location_title", "Невідомий район")
-                alert_type = ALERT_TYPE_UA.get(alert.get("alert_type", "unknown"), "Невідома тривога!")
-                text += f"• {raion} — {alert_type}\n"
+                alert_type = alert.get("alert_type", "невідомо")
+                alert_type_ua = ALERT_TYPES_UA.get(alert_type, alert_type)
+                text += f"• {raion} — {alert_type_ua}\n"
         else:
             text = "✅ У Криму зараз все спокійно (нема активних тривог)."
 
         await update.message.reply_text(text)
 
     except Exception as e:
+        logging.error(f"Помилка при запиті до API для Криму: {e}")
         await update.message.reply_text(f"Помилка при запиті до API: {e}")
 
-# ===== Новий тестовий запит: "Що по Києву?" =====
 async def kyiv_alerts(update: Update, context: ContextTypes.DEFAULT_TYPE):
     headers = {"Authorization": f"Bearer {ALERTS_TOKEN}"}
     try:
@@ -117,48 +120,37 @@ async def kyiv_alerts(update: Update, context: ContextTypes.DEFAULT_TYPE):
             async with session.get(API_URL, headers=headers, timeout=10) as resp:
                 data = await resp.json()
 
-        kyiv_alerts = [
+        kyiv_alerts_list = [
             alert for alert in data.get("alerts", [])
-            if alert.get("location_city") == "Київ"
+            if alert.get("location_oblast") == "м. Київ"
         ]
 
-        if kyiv_alerts:
+        if kyiv_alerts_list:
             text = "🚨 У м.Київ зафіксована тривога!\n"
-            for alert in kyiv_alerts:
+            for alert in kyiv_alerts_list:
                 raion = alert.get("location_title", "Невідомий район")
-                alert_type = ALERT_TYPE_UA.get(alert.get("alert_type", "unknown"), "Невідома тривога!")
-                text += f"• {raion} — {alert_type}\n"
+                alert_type = alert.get("alert_type", "невідомо")
+                alert_type_ua = ALERT_TYPES_UA.get(alert_type, alert_type)
+                text += f"• {raion} — {alert_type_ua}\n"
         else:
-            text = "✅ У м.Київ зараз все спокійно (нема активних тривог)."
+            text = "✅ У м.Київ зараз все чисто!"
+            try:
+                with open("images/Saefty.jpg", "rb") as photo:
+                    await update.message.reply_photo(photo=photo)
+            except Exception as e:
+                logging.error(f"Помилка при відправці картинки: {e}")
 
         await update.message.reply_text(text)
 
     except Exception as e:
+        logging.error(f"Помилка при запиті до API для Києва: {e}")
         await update.message.reply_text(f"Помилка при запиті до API: {e}")
 
-# ===== Функції для відбоїв та тривог =====
-async def send_clear_message(app, region):
-    caption = f"✅ Відбій повітряної тривоги в {region}!"
-    photo_path = "images/Clear.jpg"
-    with open(photo_path, "rb") as photo:
-        await app.bot.send_photo(chat_id=CHAT_ID, photo=photo, caption=caption)
-
-async def send_alarm_message(app, region, alerts):
-    text = f"🚨 *Активні тривоги у {region}:*\n"
-    for alert in alerts:
-        raion = alert.get("location_title", "Невідомий район")
-        alert_type = ALERT_TYPE_UA.get(alert.get("alert_type", "unknown"), "Невідома тривога!")
-        text += f"• {raion} — {alert_type}\n"
-
-    photo_path = "images/Alarm.jpg"
-    with open(photo_path, "rb") as photo:
-        await app.bot.send_photo(chat_id=CHAT_ID, photo=photo, caption=text, parse_mode="Markdown")
-
-# ===== Фонове опитування API з відбоєм та картинками =====
-last_alert_active = False
+# ===== Фонове опитування API =====
+last_region_alerts_count = 0  # для відбою тривоги
 
 async def poll_alerts(app):
-    global last_alert_active
+    global last_region_alerts_count
     while True:
         headers = {"Authorization": f"Bearer {ALERTS_TOKEN}"}
         try:
@@ -171,27 +163,52 @@ async def poll_alerts(app):
                 if alert.get("location_oblast") == REGION
             ]
 
-            if region_alerts and not last_alert_active:
-                last_alert_active = True
-                await send_alarm_message(app, REGION, region_alerts)
+            # ===== Якщо є тривоги =====
+            if region_alerts:
+                text = f"🚨 *Активні тривоги у {REGION}:*\n"
+                for alert in region_alerts:
+                    raion = alert.get("location_title", "Невідомий район")
+                    alert_type = alert.get("alert_type", "невідомо")
+                    alert_type_ua = ALERT_TYPES_UA.get(alert_type, alert_type)
+                    text += f"• {raion} — {alert_type_ua}\n"
+                await app.bot.send_message(chat_id=CHAT_ID, text=text, parse_mode="Markdown")
 
-            elif not region_alerts and last_alert_active:
-                last_alert_active = False
-                await send_clear_message(app, REGION)
+            # ===== Відбій тривоги =====
+            if last_region_alerts_count > 0 and len(region_alerts) == 0:
+                # Було >0, стало 0 — відбій!
+                try:
+                    await app.bot.send_message(chat_id=CHAT_ID,
+                                               text=f"✅ Відбій тривоги у {REGION}")
+                    with open("images/Clear.jpg", "rb") as photo:
+                        await app.bot.send_photo(chat_id=CHAT_ID, photo=photo)
+                except Exception as e:
+                    logging.error(f"Помилка при відправці картинки відбою: {e}")
+
+            last_region_alerts_count = len(region_alerts)
 
         except Exception as e:
-            print(f"Помилка при опитуванні API: {e}")
+            logging.error(f"Помилка при опитуванні API: {e}")
 
         await asyncio.sleep(POLL_INTERVAL)
+
+# ===== Обробка помилок Telegram =====
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    logging.error(msg="Виникла помилка у хендлері:", exc_info=context.error)
+    if update and hasattr(update, "message") and update.message:
+        await update.message.reply_text("⚠️ Виникла внутрішня помилка бота. Спробуйте пізніше.")
 
 # ===== Основний цикл =====
 async def main():
     nest_asyncio.apply()
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex("(?i)що по області"), oblast_alerts))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex("(?i)як там крим"), krym_alerts))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex("(?i)що по києву"), kyiv_alerts))
+
+    app.add_error_handler(error_handler)
+
     asyncio.create_task(poll_alerts(app))
     print("✅ Бот запущено...")
     await app.run_polling()
