@@ -1,10 +1,19 @@
 import os
-import asyncio
-import nest_asyncio
-nest_asyncio.apply()
-import aiohttp
-from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
+from threading import Thread
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+class StubHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"OK")
+
+def run_http_server():
+    port = int(os.environ.get("PORT", 10000))
+    server = HTTPServer(('0.0.0.0', port), StubHandler)
+    server.serve_forever()
+
+Thread(target=run_http_server, daemon=True).start()
 
 # 🔐 Твої токени та налаштування
 TELEGRAM_TOKEN = os.getenv("BOT_TOKEN")
