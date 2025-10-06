@@ -11,6 +11,9 @@ REGION = os.getenv("REGION", "Київська область")
 POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", 25))
 CHAT_ID = int(os.getenv("CHAT_ID", "177475616"))
 
+if not TELEGRAM_TOKEN or not ALERTS_TOKEN or not CHAT_ID:
+    raise RuntimeError("Не задано одну або кілька обов'язкових змінних оточення: BOT_TOKEN, ALERTS_TOKEN, CHAT_ID")
+
 API_URL = "https://api.alerts.in.ua/v1/alerts/active.json"
 
 
