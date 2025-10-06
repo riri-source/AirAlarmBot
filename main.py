@@ -1,8 +1,14 @@
 import os
 from threading import Thread
 from http.server import BaseHTTPRequestHandler, HTTPServer
+import asyncio
+import nest_asyncio
+import logging
+import aiohttp
+from telegram import Update
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
-# ===== Фейковий HTTP сервер (для Render) =====
+# ===== Фейковий HTTP сервер для Render =====
 class StubHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -15,14 +21,6 @@ def run_http_server():
     server.serve_forever()
 
 Thread(target=run_http_server, daemon=True).start()
-
-# ===== Імпорти для бота =====
-import asyncio
-import nest_asyncio
-import logging
-import aiohttp
-from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
 # ===== Логування =====
 logging.basicConfig(level=logging.INFO)
