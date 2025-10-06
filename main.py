@@ -4,9 +4,9 @@ from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
-    ContextTypes,
     MessageHandler,
     filters,
+    ContextTypes,
 )
 
 # 🔐 Твої токени та налаштування
@@ -14,16 +14,14 @@ TELEGRAM_TOKEN = os.getenv("BOT_TOKEN")
 ALERTS_TOKEN = os.getenv("ALERTS_TOKEN")
 REGION = os.getenv("REGION", "Київська область")
 POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", 25))
-CHAT_ID = int(os.getenv("CHAT_ID"))
+CHAT_ID = int(os.getenv("CHAT_ID", 177475616))
 
 API_URL = "https://api.alerts.in.ua/v1/alerts/active.json"
-
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"Привіт 🌸\nНапиши «Що по області» щоб дізнатись, де зараз тривога у {REGION}."
     )
-
 
 async def oblast_alerts(update: Update, context: ContextTypes.DEFAULT_TYPE):
     headers = {"Authorization": f"Bearer {ALERTS_TOKEN}"}
@@ -51,14 +49,14 @@ async def oblast_alerts(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"Помилка отримання даних: {e}")
 
-
 async def poll_alerts(app):
-    """Фоновий таск для перевірки тривог"""
+    """Фоновий таск для опитування API"""
     headers = {"Authorization": f"Bearer {ALERTS_TOKEN}"}
     while True:
         try:
             response = requests.get(API_URL, headers=headers, timeout=10)
             data = response.json()
+
             region_alerts = [
                 alert for alert in data.get("alerts", [])
                 if alert.get("location_oblast") == REGION
@@ -71,6 +69,7 @@ async def poll_alerts(app):
                     alert_type = alert.get("alert_type", "невідомо")
                     text += f"• {raion} — {alert_type}\n"
 
+                # Надсилаємо тільки у вказаний чат
                 await app.bot.send_message(chat_id=CHAT_ID, text=text, parse_mode="Markdown")
 
         except Exception as e:
@@ -78,19 +77,22 @@ async def poll_alerts(app):
 
         await asyncio.sleep(POLL_INTERVAL)
 
+async def post_init(app):
+    """Запуск фонового таску після старту бота"""
+    app.create_task(poll_alerts(app))
 
 def main():
-    app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+    app = ApplicationBuilder()\
+        .token(TELEGRAM_TOKEN)\
+        .post_init(post_init)\
+        .build()
 
+    # Обробники команд та повідомлень
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex("(?i)що по області"), oblast_alerts))
 
-    # Старт фонової перевірки тривог
-    app.create_task(poll_alerts(app))
-
     print("✅ Бот запущено...")
     app.run_polling()
-
 
 if __name__ == "__main__":
     main()
