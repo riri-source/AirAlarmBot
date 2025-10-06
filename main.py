@@ -73,6 +73,33 @@ async def oblast_alerts(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"Помилка отримання даних: {e}")
 
+# ===== Тестовий запит: "Як там Крим?" =====
+async def krym_alerts(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    headers = {"Authorization": f"Bearer {ALERTS_TOKEN}"}
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(API_URL, headers=headers, timeout=10) as resp:
+                data = await resp.json()
+
+        krym_alerts = [
+            alert for alert in data.get("alerts", [])
+            if alert.get("location_oblast") == "Автономна Республіка Крим"
+        ]
+
+        if krym_alerts:
+            text = "🚨 У Криму зафіксована тривога!\n"
+            for alert in krym_alerts:
+                raion = alert.get("location_title", "Невідомий район")
+                alert_type = alert.get("alert_type", "невідомо")
+                text += f"• {raion} — {alert_type}\n"
+        else:
+            text = "✅ У Криму зараз все спокійно (нема активних тривог)."
+
+        await update.message.reply_text(text)
+
+    except Exception as e:
+        await update.message.reply_text(f"Помилка при запиті до API: {e}")
+
 # ===== Фонове опитування API =====
 async def poll_alerts(app):
     while True:
@@ -107,6 +134,7 @@ async def main():
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex("(?i)що по області"), oblast_alerts))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex("(?i)як там крим"), krym_alerts))
     asyncio.create_task(poll_alerts(app))
     print("✅ Бот запущено...")
     await app.run_polling()
