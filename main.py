@@ -13,11 +13,12 @@ CHAT_ID = int(os.getenv("CHAT_ID", "177475616"))
 
 API_URL = "https://api.alerts.in.ua/v1/alerts/active.json"
 
-# ===== Обробники команд =====
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"Привіт 🌸\nНапиши «Що по області» щоб дізнатись, де зараз тривога у {REGION}."
     )
+
 
 async def oblast_alerts(update: Update, context: ContextTypes.DEFAULT_TYPE):
     headers = {"Authorization": f"Bearer {ALERTS_TOKEN}"}
@@ -46,8 +47,8 @@ async def oblast_alerts(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"Помилка отримання даних: {e}")
 
-# ===== Фонове опитування API =====
-async def poll_alerts(app):
+
+async def poll_alerts(app: ApplicationBuilder):
     headers = {"Authorization": f"Bearer {ALERTS_TOKEN}"}
     while True:
         try:
@@ -74,19 +75,22 @@ async def poll_alerts(app):
 
         await asyncio.sleep(POLL_INTERVAL)
 
-# ===== Головна функція =====
+
 async def main():
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
-    # Обробники команд та повідомлень
+    # Команди і повідомлення
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex("(?i)що по області"), oblast_alerts))
 
-    # Запуск фонової задачі без JobQueue
-    app.create_task(poll_alerts(app))
+    # Старт фонової задачі без JobQueue
+    asyncio.create_task(poll_alerts(app))
 
     print("✅ Бот запущено...")
     await app.run_polling()
 
+
 if __name__ == "__main__":
+    import nest_asyncio
+    nest_asyncio.apply()  # дозволяє працювати на Render / Jupyter-подібних середовищах
     asyncio.run(main())
