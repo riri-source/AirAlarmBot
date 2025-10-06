@@ -1,4 +1,7 @@
-fastapi==0.111.1
-uvicorn==0.23.2
-requests==2.32.5
+python-telegram-bot==20.8
+fastapi==0.115.0
+uvicorn==0.30.6
+requests==2.32.3
+pydantic==2.9.2
+aiohttp==3.10.5
 python-dotenv==1.0.1
