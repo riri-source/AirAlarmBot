@@ -1,6 +1,6 @@
 import os
 import asyncio
-import requests
+import aiohttp
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
@@ -8,18 +8,17 @@ from telegram.ext import (
     MessageHandler,
     filters,
     ContextTypes,
+    JobQueue,
 )
 
 # 🔐 Твої токени та налаштування
-TELEGRAM_TOKEN = os.getenv("BOT_TOKEN")  # токен бота
-ALERTS_TOKEN = os.getenv("ALERTS_TOKEN")  # токен alerts.in.ua
-REGION = os.getenv("REGION", "Київська область")  # регіон для перевірки
-POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", 25))  # інтервал опитування API
+TELEGRAM_TOKEN = os.getenv("BOT_TOKEN")
+ALERTS_TOKEN = os.getenv("ALERTS_TOKEN")
+REGION = os.getenv("REGION", "Київська область")
+POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", 25))
+CHAT_ID = int(os.getenv("CHAT_ID", "177475616"))
 
 API_URL = "https://api.alerts.in.ua/v1/alerts/active.json"
-
-# Тільки твій чат
-CHAT_ID = int(os.getenv("CHAT_ID", "177475616"))
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -31,8 +30,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def oblast_alerts(update: Update, context: ContextTypes.DEFAULT_TYPE):
     headers = {"Authorization": f"Bearer {ALERTS_TOKEN}"}
     try:
-        response = requests.get(API_URL, headers=headers, timeout=10)
-        data = response.json()
+        async with aiohttp.ClientSession() as session:
+            async with session.get(API_URL, headers=headers, timeout=10) as resp:
+                data = await resp.json()
 
         region_alerts = [
             alert for alert in data.get("alerts", [])
@@ -55,46 +55,45 @@ async def oblast_alerts(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Помилка отримання даних: {e}")
 
 
-async def poll_alerts(app):
-    """Фонове опитування API для одного чату"""
+async def poll_alerts(context: ContextTypes.DEFAULT_TYPE):
     headers = {"Authorization": f"Bearer {ALERTS_TOKEN}"}
-    while True:
-        try:
-            response = requests.get(API_URL, headers=headers, timeout=10)
-            data = response.json()
-            region_alerts = [
-                alert for alert in data.get("alerts", [])
-                if alert.get("location_oblast") == REGION
-            ]
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(API_URL, headers=headers, timeout=10) as resp:
+                data = await resp.json()
 
-            if region_alerts:
-                text = f"🚨 *Активні тривоги у {REGION}:*\n"
-                for alert in region_alerts:
-                    raion = alert.get("location_title", "Невідомий район")
-                    alert_type = alert.get("alert_type", "невідомо")
-                    text += f"• {raion} — {alert_type}\n"
+        region_alerts = [
+            alert for alert in data.get("alerts", [])
+            if alert.get("location_oblast") == REGION
+        ]
 
-                await app.bot.send_message(chat_id=CHAT_ID, text=text, parse_mode="Markdown")
+        if region_alerts:
+            text = f"🚨 *Активні тривоги у {REGION}:*\n"
+            for alert in region_alerts:
+                raion = alert.get("location_title", "Невідомий район")
+                alert_type = alert.get("alert_type", "невідомо")
+                text += f"• {raion} — {alert_type}\n"
 
-        except Exception as e:
-            print(f"Помилка при опитуванні API: {e}")
+            await context.bot.send_message(
+                chat_id=CHAT_ID, text=text, parse_mode="Markdown"
+            )
 
-        await asyncio.sleep(POLL_INTERVAL)
+    except Exception as e:
+        print(f"Помилка при опитуванні API: {e}")
 
 
 async def main():
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
-    # Обробники команд та повідомлень
+    # Обробники команд
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex("(?i)що по області"), oblast_alerts))
 
+    # Запуск фонової задачі через job_queue
+    job_queue: JobQueue = app.job_queue
+    job_queue.run_repeating(poll_alerts, interval=POLL_INTERVAL, first=5)
+
     print("✅ Бот запущено...")
-
-    # Стартуємо фоновий таск
-    app.create_task(poll_alerts(app))
-
-    # Запускаємо polling
     await app.run_polling()
 
 
