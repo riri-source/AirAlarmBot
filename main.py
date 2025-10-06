@@ -8,6 +8,16 @@ import aiohttp
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
+# ===== Словничок типів тривог =====
+ALERT_TYPE_UA = {
+    "air_raid": "Повітряна тривога!",
+    "artillery_shelling": "Артилерійський обстріл!",
+    "urban_fights": "Бої в населеному пункті!",
+    "chemical_threat": "Хімічна небезпека!",
+    "nuclear_threat": "Радіаційна небезпека!",
+    "unknown": "Невідома тривога!"
+}
+
 # ===== Фейковий HTTP сервер для Render =====
 class StubHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -57,7 +67,6 @@ async def oblast_alerts(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if not region_alerts:
             await update.message.reply_text(f"✅ {REGION} - зараз все чисто!")
-            # Відправка картинки Saefty.jpg
             with open("images/Saefty.jpg", "rb") as photo:
                 await update.message.reply_photo(photo=photo)
             return
@@ -65,7 +74,7 @@ async def oblast_alerts(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text = f"🚨 *Активні тривоги у {REGION}:*\n"
         for alert in region_alerts:
             raion = alert.get("location_title", "Невідомий район")
-            alert_type = alert.get("alert_type", "невідомо")
+            alert_type = ALERT_TYPE_UA.get(alert.get("alert_type", "unknown"), "Невідома тривога!")
             text += f"• {raion} — {alert_type}\n"
 
         await update.message.reply_markdown(text)
@@ -90,7 +99,7 @@ async def krym_alerts(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text = "🚨 У Криму зафіксована тривога!\n"
             for alert in krym_alerts:
                 raion = alert.get("location_title", "Невідомий район")
-                alert_type = alert.get("alert_type", "невідомо")
+                alert_type = ALERT_TYPE_UA.get(alert.get("alert_type", "unknown"), "Невідома тривога!")
                 text += f"• {raion} — {alert_type}\n"
         else:
             text = "✅ У Криму зараз все спокійно (нема активних тривог)."
@@ -100,8 +109,56 @@ async def krym_alerts(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"Помилка при запиті до API: {e}")
 
-# ===== Фонове опитування API =====
+# ===== Новий тестовий запит: "Що по Києву?" =====
+async def kyiv_alerts(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    headers = {"Authorization": f"Bearer {ALERTS_TOKEN}"}
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(API_URL, headers=headers, timeout=10) as resp:
+                data = await resp.json()
+
+        kyiv_alerts = [
+            alert for alert in data.get("alerts", [])
+            if alert.get("location_city") == "Київ"
+        ]
+
+        if kyiv_alerts:
+            text = "🚨 У м.Київ зафіксована тривога!\n"
+            for alert in kyiv_alerts:
+                raion = alert.get("location_title", "Невідомий район")
+                alert_type = ALERT_TYPE_UA.get(alert.get("alert_type", "unknown"), "Невідома тривога!")
+                text += f"• {raion} — {alert_type}\n"
+        else:
+            text = "✅ У м.Київ зараз все спокійно (нема активних тривог)."
+
+        await update.message.reply_text(text)
+
+    except Exception as e:
+        await update.message.reply_text(f"Помилка при запиті до API: {e}")
+
+# ===== Функції для відбоїв та тривог =====
+async def send_clear_message(app, region):
+    caption = f"✅ Відбій повітряної тривоги в {region}!"
+    photo_path = "images/Clear.jpg"
+    with open(photo_path, "rb") as photo:
+        await app.bot.send_photo(chat_id=CHAT_ID, photo=photo, caption=caption)
+
+async def send_alarm_message(app, region, alerts):
+    text = f"🚨 *Активні тривоги у {region}:*\n"
+    for alert in alerts:
+        raion = alert.get("location_title", "Невідомий район")
+        alert_type = ALERT_TYPE_UA.get(alert.get("alert_type", "unknown"), "Невідома тривога!")
+        text += f"• {raion} — {alert_type}\n"
+
+    photo_path = "images/Alarm.jpg"
+    with open(photo_path, "rb") as photo:
+        await app.bot.send_photo(chat_id=CHAT_ID, photo=photo, caption=text, parse_mode="Markdown")
+
+# ===== Фонове опитування API з відбоєм та картинками =====
+last_alert_active = False
+
 async def poll_alerts(app):
+    global last_alert_active
     while True:
         headers = {"Authorization": f"Bearer {ALERTS_TOKEN}"}
         try:
@@ -110,18 +167,17 @@ async def poll_alerts(app):
                     data = await resp.json()
 
             region_alerts = [
-                alert for alert in data.get("alerts", [] )
+                alert for alert in data.get("alerts", [])
                 if alert.get("location_oblast") == REGION
             ]
 
-            if region_alerts:
-                text = f"🚨 *Активні тривоги у {REGION}:*\n"
-                for alert in region_alerts:
-                    raion = alert.get("location_title", "Невідомий район")
-                    alert_type = alert.get("alert_type", "невідомо")
-                    text += f"• {raion} — {alert_type}\n"
+            if region_alerts and not last_alert_active:
+                last_alert_active = True
+                await send_alarm_message(app, REGION, region_alerts)
 
-                await app.bot.send_message(chat_id=CHAT_ID, text=text, parse_mode="Markdown")
+            elif not region_alerts and last_alert_active:
+                last_alert_active = False
+                await send_clear_message(app, REGION)
 
         except Exception as e:
             print(f"Помилка при опитуванні API: {e}")
@@ -135,6 +191,7 @@ async def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex("(?i)що по області"), oblast_alerts))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex("(?i)як там крим"), krym_alerts))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex("(?i)що по києву"), kyiv_alerts))
     asyncio.create_task(poll_alerts(app))
     print("✅ Бот запущено...")
     await app.run_polling()
