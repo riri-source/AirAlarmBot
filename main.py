@@ -38,7 +38,7 @@ async def keep_alive(port: int):
                     logging.info(f"Keep-alive ping відправлено, статус: {resp.status}")
         except Exception as e:
             logging.error(f"Помилка keep-alive ping: {e}")
-        await asyncio.sleep(300)  # 5 хвилин
+        await asyncio.sleep(60)  # 1 хвилина
 
 # ===== Змінні оточення =====
 TELEGRAM_TOKEN = os.getenv("BOT_TOKEN")
