@@ -25,6 +25,21 @@ Thread(target=run_http_server, daemon=True).start()
 # ===== Логування =====
 logging.basicConfig(level=logging.INFO)
 
+
+# ===== Будильник =====
+import aiohttp
+
+async def keep_alive(port: int):
+    url = f"http://localhost:{port}"
+    while True:
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url) as resp:
+                    logging.info(f"Keep-alive ping відправлено, статус: {resp.status}")
+        except Exception as e:
+            logging.error(f"Помилка keep-alive ping: {e}")
+        await asyncio.sleep(300)  # 5 хвилин
+
 # ===== Змінні оточення =====
 TELEGRAM_TOKEN = os.getenv("BOT_TOKEN")
 ALERTS_TOKEN = os.getenv("ALERTS_TOKEN")
@@ -211,6 +226,7 @@ async def main():
     asyncio.create_task(poll_alerts(app))
     print("✅ Бот запущено...")
     await app.run_polling()
+    asyncio.create_task(keep_alive(int(os.environ.get("PORT", 10000))))
 
 # ===== Запуск =====
 if __name__ == "__main__":
