@@ -1,15 +1,20 @@
 import os
-import asyncio
 import requests
 from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    ContextTypes,
+    MessageHandler,
+    filters,
+)
 
 # 🔐 Твої токени та налаштування
 TELEGRAM_TOKEN = os.getenv("BOT_TOKEN")
 ALERTS_TOKEN = os.getenv("ALERTS_TOKEN")
 REGION = os.getenv("REGION", "Київська область")
 POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", 25))
-CHAT_ID = int(os.getenv("CHAT_ID", 177475616))
+CHAT_ID = int(os.getenv("CHAT_ID"))
 
 API_URL = "https://api.alerts.in.ua/v1/alerts/active.json"
 
@@ -47,7 +52,8 @@ async def oblast_alerts(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Помилка отримання даних: {e}")
 
 
-async def poll_alerts(app: "ApplicationBuilder"):
+async def poll_alerts(app):
+    """Фоновий таск для перевірки тривог"""
     headers = {"Authorization": f"Bearer {ALERTS_TOKEN}"}
     while True:
         try:
@@ -73,18 +79,18 @@ async def poll_alerts(app: "ApplicationBuilder"):
         await asyncio.sleep(POLL_INTERVAL)
 
 
-async def main():
+def main():
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex("(?i)що по області"), oblast_alerts))
 
-    # Фоновий таск для опитування API
-    asyncio.create_task(poll_alerts(app))
+    # Старт фонової перевірки тривог
+    app.create_task(poll_alerts(app))
 
     print("✅ Бот запущено...")
-    await app.run_polling()
+    app.run_polling()
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
