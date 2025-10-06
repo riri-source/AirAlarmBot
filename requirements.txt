@@ -2,3 +2,4 @@ python-telegram-bot>=20.6
 aiohttp>=3.9.0
 nest-asyncio
 python-dotenv
+Flask
