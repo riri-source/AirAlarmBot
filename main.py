@@ -48,9 +48,9 @@ async def oblast_alerts(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Помилка отримання даних: {e}")
 
 
-async def poll_alerts(app: ApplicationBuilder):
-    headers = {"Authorization": f"Bearer {ALERTS_TOKEN}"}
+async def poll_alerts(app):
     while True:
+        headers = {"Authorization": f"Bearer {ALERTS_TOKEN}"}
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(API_URL, headers=headers, timeout=10) as resp:
@@ -79,11 +79,11 @@ async def poll_alerts(app: ApplicationBuilder):
 async def main():
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
-    # Команди і повідомлення
+    # Обробники команд
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex("(?i)що по області"), oblast_alerts))
 
-    # Старт фонової задачі без JobQueue
+    # Фоновий таск
     asyncio.create_task(poll_alerts(app))
 
     print("✅ Бот запущено...")
@@ -91,6 +91,4 @@ async def main():
 
 
 if __name__ == "__main__":
-    import nest_asyncio
-    nest_asyncio.apply()  # дозволяє працювати на Render / Jupyter-подібних середовищах
     asyncio.run(main())
