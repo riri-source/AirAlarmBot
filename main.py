@@ -14,17 +14,23 @@ TELEGRAM_TOKEN = os.getenv("BOT_TOKEN")  # токен бота
 ALERTS_TOKEN = os.getenv("ALERTS_TOKEN")  # токен alerts.in.ua
 REGION = os.getenv("REGION", "Київська область")  # регіон для перевірки
 POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", 25))  # інтервал опитування API
+CHAT_ID = int(os.getenv("CHAT_ID", 177475616))  # конкретний чат для повідомлень
 
 API_URL = "https://api.alerts.in.ua/v1/alerts/active.json"
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        f"Привіт 🌸\nНапиши «Що по області» щоб дізнатись, де зараз тривога у {REGION}."
-    )
+    if update.effective_chat.id == CHAT_ID or update.effective_chat.type == "private":
+        await update.message.reply_text(
+            f"Привіт 🌸\nНапиши «Що по області» щоб дізнатись, де зараз тривога у {REGION}."
+        )
 
 
 async def oblast_alerts(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Відповідаємо лише у приваті або в CHAT_ID
+    if update.effective_chat.id != CHAT_ID and update.effective_chat.type != "private":
+        return
+
     headers = {"Authorization": f"Bearer {ALERTS_TOKEN}"}
     try:
         response = requests.get(API_URL, headers=headers, timeout=10)
@@ -51,16 +57,8 @@ async def oblast_alerts(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Помилка отримання даних: {e}")
 
 
-async def register_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Зберігаємо chat_id для автоматичних повідомлень"""
-    chat_id = update.effective_chat.id
-    if "chats" not in context.application.bot_data:
-        context.application.bot_data["chats"] = set()
-    context.application.bot_data["chats"].add(chat_id)
-
-
 async def poll_alerts(context: ContextTypes.DEFAULT_TYPE):
-    """Перевірка тривог у REGION кожні POLL_INTERVAL секунд"""
+    """Перевірка тривог у REGION кожні POLL_INTERVAL секунд і надсилання у конкретний чат"""
     headers = {"Authorization": f"Bearer {ALERTS_TOKEN}"}
     try:
         response = requests.get(API_URL, headers=headers, timeout=10)
@@ -77,8 +75,7 @@ async def poll_alerts(context: ContextTypes.DEFAULT_TYPE):
                 alert_type = alert.get("alert_type", "невідомо")
                 text += f"• {raion} — {alert_type}\n"
 
-            for chat_id in context.bot_data.get("chats", []):
-                await context.bot.send_message(chat_id=chat_id, text=text, parse_mode="Markdown")
+            await context.bot.send_message(chat_id=CHAT_ID, text=text, parse_mode="Markdown")
 
     except Exception as e:
         print(f"Помилка при опитуванні API: {e}")
@@ -90,7 +87,6 @@ def main():
     # Обробники команд та повідомлень
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex("(?i)що по області"), oblast_alerts))
-    app.add_handler(MessageHandler(filters.TEXT, register_chat))  # зберігаємо нові чати
 
     # Фоновий таск для опитування API
     app.job_queue.run_repeating(poll_alerts, interval=POLL_INTERVAL, first=5)
