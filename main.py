@@ -2,6 +2,7 @@ import os
 from threading import Thread
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
+# Фейковий HTTP сервер (для Render)
 class StubHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -15,6 +16,13 @@ def run_http_server():
 
 Thread(target=run_http_server, daemon=True).start()
 
+# Далі всі імпорти для бота
+import asyncio
+import nest_asyncio
+nest_asyncio.apply()
+import aiohttp
+from telegram import Update  # <-- ОБОВ'ЯЗКОВО має бути до використання Update!
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 # 🔐 Твої токени та налаштування
 TELEGRAM_TOKEN = os.getenv("BOT_TOKEN")
 ALERTS_TOKEN = os.getenv("ALERTS_TOKEN")
