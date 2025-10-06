@@ -2,7 +2,7 @@ import os
 from threading import Thread
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-# Фейковий HTTP сервер (для Render)
+# ===== Фейковий HTTP сервер (для Render) =====
 class StubHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -16,14 +16,18 @@ def run_http_server():
 
 Thread(target=run_http_server, daemon=True).start()
 
-# Далі всі імпорти для бота
+# ===== Імпорти для бота =====
 import asyncio
 import nest_asyncio
-nest_asyncio.apply()
+import logging
 import aiohttp
-from telegram import Update  # <-- ОБОВ'ЯЗКОВО має бути до використання Update!
+from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
-# 🔐 Твої токени та налаштування
+
+# ===== Логування =====
+logging.basicConfig(level=logging.INFO)
+
+# ===== Змінні оточення =====
 TELEGRAM_TOKEN = os.getenv("BOT_TOKEN")
 ALERTS_TOKEN = os.getenv("ALERTS_TOKEN")
 REGION = os.getenv("REGION", "Київська область")
@@ -35,12 +39,11 @@ if not TELEGRAM_TOKEN or not ALERTS_TOKEN or not CHAT_ID:
 
 API_URL = "https://api.alerts.in.ua/v1/alerts/active.json"
 
-
+# ===== Хендлери =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"Привіт 🌸\nНапиши «Що по області» щоб дізнатись, де зараз тривога у {REGION}."
     )
-
 
 async def oblast_alerts(update: Update, context: ContextTypes.DEFAULT_TYPE):
     headers = {"Authorization": f"Bearer {ALERTS_TOKEN}"}
@@ -69,7 +72,7 @@ async def oblast_alerts(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"Помилка отримання даних: {e}")
 
-
+# ===== Фонове опитування API =====
 async def poll_alerts(app):
     while True:
         headers = {"Authorization": f"Bearer {ALERTS_TOKEN}"}
@@ -79,7 +82,7 @@ async def poll_alerts(app):
                     data = await resp.json()
 
             region_alerts = [
-                alert for alert in data.get("alerts", [])
+                alert for alert in data.get("alerts", [] )
                 if alert.get("location_oblast") == REGION
             ]
 
@@ -97,20 +100,17 @@ async def poll_alerts(app):
 
         await asyncio.sleep(POLL_INTERVAL)
 
-
+# ===== Основний цикл =====
 async def main():
+    nest_asyncio.apply()
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-
-    # Обробники команд
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex("(?i)що по області"), oblast_alerts))
-
-    # Фоновий таск
     asyncio.create_task(poll_alerts(app))
-
     print("✅ Бот запущено...")
     await app.run_polling()
 
-
+# ===== Запуск =====
 if __name__ == "__main__":
-    asyncio.run(main())
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(main())
