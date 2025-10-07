@@ -25,10 +25,7 @@ Thread(target=run_http_server, daemon=True).start()
 # ===== Логування =====
 logging.basicConfig(level=logging.INFO)
 
-
 # ===== Будильник =====
-import aiohttp
-
 async def keep_alive(port: int):
     url = f"http://localhost:{port}"
     while True:
@@ -60,7 +57,7 @@ ALERT_TYPES_UA = {
     "other": "Інша тривога",
 }
 
-# ===== Хендлери =====
+# ===== Хендлери для користувача =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"Привіт 🌸\nНапиши «Що по області» щоб дізнатись, де зараз тривога у {REGION}."
@@ -161,11 +158,11 @@ async def kyiv_alerts(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logging.error(f"Помилка при запиті до API для Києва: {e}")
         await update.message.reply_text(f"Помилка при запиті до API: {e}")
 
-# ===== Фонове опитування API =====
-last_region_alerts_count = 0  # для відбою тривоги
+# ===== Фонове опитування API та відстеження змін =====
+last_alerts_by_raion = {}  # {"район": "alert_type"}
 
 async def poll_alerts(app):
-    global last_region_alerts_count
+    global last_alerts_by_raion
     while True:
         headers = {"Authorization": f"Bearer {ALERTS_TOKEN}"}
         try:
@@ -178,27 +175,30 @@ async def poll_alerts(app):
                 if alert.get("location_oblast") == REGION
             ]
 
-            # ===== Якщо є тривоги =====
-            if region_alerts:
-                text = f"🚨 *Активні тривоги у {REGION}:*\n"
-                for alert in region_alerts:
-                    raion = alert.get("location_title", "Невідомий район")
-                    alert_type = alert.get("alert_type", "невідомо")
-                    alert_type_ua = ALERT_TYPES_UA.get(alert_type, alert_type)
-                    text += f"• {raion} — {alert_type_ua}\n"
-                await app.bot.send_message(chat_id=CHAT_ID, text=text, parse_mode="Markdown")
+            current_raions = {alert.get("location_title", "Невідомий район"): alert.get("alert_type", "невідомо") for alert in region_alerts}
 
-            # ===== Відбій тривоги =====
-            if last_region_alerts_count > 0 and len(region_alerts) == 0:
-                try:
-                    await app.bot.send_message(chat_id=CHAT_ID,
-                                               text=f"✅ Відбій тривоги у {REGION}")
-                    with open("images/Clear.jpg", "rb") as photo:
-                        await app.bot.send_photo(chat_id=CHAT_ID, photo=photo)
-                except Exception as e:
-                    logging.error(f"Помилка при відправці картинки відбою: {e}")
+            # ===== Нові тривоги =====
+            for raion, alert_type in current_raions.items():
+                if raion not in last_alerts_by_raion:
+                    try:
+                        with open("images/Alarm.jpg", "rb") as photo:
+                            await app.bot.send_photo(chat_id=CHAT_ID, photo=photo)
+                        alert_type_ua = ALERT_TYPES_UA.get(alert_type, alert_type)
+                        await app.bot.send_message(chat_id=CHAT_ID, text=f"🚨 *Тривога у {raion}:* {alert_type_ua}", parse_mode="Markdown")
+                    except Exception as e:
+                        logging.error(f"Помилка при відправці нової тривоги: {e}")
 
-            last_region_alerts_count = len(region_alerts)
+            # ===== Відбій тривоги по районах =====
+            for raion in list(last_alerts_by_raion.keys()):
+                if raion not in current_raions:
+                    try:
+                        with open("images/Clear.jpg", "rb") as photo:
+                            await app.bot.send_photo(chat_id=CHAT_ID, photo=photo)
+                        await app.bot.send_message(chat_id=CHAT_ID, text=f"🟢 Відбій тривоги у {raion}")
+                    except Exception as e:
+                        logging.error(f"Помилка при відправці відбою по району: {e}")
+
+            last_alerts_by_raion = current_raions
 
         except Exception as e:
             logging.error(f"Помилка при опитуванні API: {e}")
@@ -224,9 +224,10 @@ async def main():
     app.add_error_handler(error_handler)
 
     asyncio.create_task(poll_alerts(app))
+    asyncio.create_task(keep_alive(int(os.environ.get("PORT", 10000))))
+
     print("✅ Бот запущено...")
     await app.run_polling()
-    asyncio.create_task(keep_alive(int(os.environ.get("PORT", 10000))))
 
 # ===== Запуск =====
 if __name__ == "__main__":
