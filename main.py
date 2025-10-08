@@ -5,8 +5,18 @@ import asyncio
 import nest_asyncio
 import logging
 import aiohttp
+from dotenv import load_dotenv
 from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    MessageHandler,
+    filters,
+    ContextTypes,
+)
+
+# ===== Load .env (якщо використовується) =====
+load_dotenv()
 
 # ===== Фейковий HTTP сервер для Render =====
 class StubHandler(BaseHTTPRequestHandler):
@@ -17,7 +27,7 @@ class StubHandler(BaseHTTPRequestHandler):
 
 def run_http_server():
     port = int(os.environ.get("PORT", 10000))
-    server = HTTPServer(('0.0.0.0', port), StubHandler)
+    server = HTTPServer(("0.0.0.0", port), StubHandler)
     server.serve_forever()
 
 Thread(target=run_http_server, daemon=True).start()
@@ -30,14 +40,20 @@ TELEGRAM_TOKEN = os.getenv("BOT_TOKEN")
 ALERTS_TOKEN = os.getenv("ALERTS_TOKEN")
 REGION = os.getenv("REGION", "Київська область")
 POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", 25))
-CHAT_ID = os.getenv("CHAT_ID")  # спочатку з env
 
-if not TELEGRAM_TOKEN or not ALERTS_TOKEN or not CHAT_ID:
-    raise RuntimeError("Не задано одну або кілька обов'язкових змінних оточення: BOT_TOKEN, ALERTS_TOKEN, CHAT_ID")
+# CHAT_ID може бути задано як ENV або встановлюватись після /start
+CHAT_ID_ENV = os.getenv("CHAT_ID")
+CHAT_ID = int(CHAT_ID_ENV) if CHAT_ID_ENV else None
+
+# Адмін для аварійної зупинки
+ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
+
+if not TELEGRAM_TOKEN or not ALERTS_TOKEN:
+    raise RuntimeError("Не задано одну або кілька обов'язкових змінних оточення: BOT_TOKEN, ALERTS_TOKEN")
 
 API_URL = "https://api.alerts.in.ua/v1/alerts/active.json"
 
-# ===== Словник типів тривог =====
+# ===== Словник типів тривог (українські назви) =====
 ALERT_TYPES_UA = {
     "air_raid": "Повітряна тривога!",
     "chemical": "Хімічна тривога",
@@ -45,13 +61,39 @@ ALERT_TYPES_UA = {
     "other": "Інша тривога",
 }
 
+# ===== Глобальні змінні для стану та тасків =====
+current_region_alerts = {}  # {район: тип тривоги}
+_poll_task = None  # посилання на фонову задачу опитування
+
+
+# ===== Допоміжні функції =====
+async def fetch_alerts(location_name, city_type="oblast"):
+    headers = {"Authorization": f"Bearer {ALERTS_TOKEN}"}
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(API_URL, headers=headers, timeout=10) as resp:
+                data = await resp.json()
+        if city_type == "oblast":
+            return [a for a in data.get("alerts", []) if a.get("location_oblast") == location_name]
+        else:
+            return [
+                a
+                for a in data.get("alerts", [])
+                if a.get("location_title") == location_name or a.get("location_oblast") == location_name
+            ]
+    except Exception as e:
+        logging.error(f"Помилка при запиті до API: {e}")
+        return []
+
+
 # ===== Хендлери =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global CHAT_ID
-    CHAT_ID = update.effective_chat.id  # отримуємо chat_id після першого старту
+    CHAT_ID = update.effective_chat.id  # зберігаємо chat_id після першої команди /start
     await update.message.reply_text(
         f"Привіт 🌸\nНапиши «Що по області» щоб дізнатись, де зараз тривога у {REGION}."
     )
+
 
 async def oblast_alerts(update: Update, context: ContextTypes.DEFAULT_TYPE):
     alerts = await fetch_alerts(REGION)
@@ -72,6 +114,7 @@ async def oblast_alerts(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text += f"• {raion} — {alert_type_ua}\n"
     await update.message.reply_markdown(text)
 
+
 async def city_alerts(update: Update, context: ContextTypes.DEFAULT_TYPE, city_name, city_label):
     alerts = await fetch_alerts(city_name, city_type="city")
     if not alerts:
@@ -91,78 +134,80 @@ async def city_alerts(update: Update, context: ContextTypes.DEFAULT_TYPE, city_n
         text += f"• {raion} — {alert_type_ua}\n"
     await update.message.reply_text(text)
 
+
 async def krym_alerts(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await city_alerts(update, context, "Автономна Республіка Крим", "Крим")
+
 
 async def kyiv_alerts(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await city_alerts(update, context, "м. Київ", "Київ")
 
+
 async def odesa_alerts(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await city_alerts(update, context, "м. Одеса", "Одеса")
+
 
 async def frankivsk_alerts(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await city_alerts(update, context, "м. Івано-Франківськ", "Івано-Франківськ")
 
-# ===== Функція для отримання тривог =====
-async def fetch_alerts(location_name, city_type="oblast"):
-    headers = {"Authorization": f"Bearer {ALERTS_TOKEN}"}
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(API_URL, headers=headers, timeout=10) as resp:
-                data = await resp.json()
-        if city_type == "oblast":
-            return [a for a in data.get("alerts", []) if a.get("location_oblast") == location_name]
-        else:
-            return [a for a in data.get("alerts", []) if a.get("location_title") == location_name or a.get("location_oblast") == location_name]
-    except Exception as e:
-        logging.error(f"Помилка при запиті до API: {e}")
-        return []
 
 # ===== Фонове опитування API =====
-current_region_alerts = {}  # {район: тип тривоги}
-
 async def poll_alerts(app):
-    global current_region_alerts, CHAT_ID
+    global current_region_alerts
+    logging.info("🔁 Фонове опитування запущено")
     first_run = True
     while True:
         alerts = await fetch_alerts(REGION)
         new_state = {a.get("location_title"): a.get("alert_type") for a in alerts}
 
-        # ===== Нові тривоги по районах =====
+        # Нові тривоги по районах
         for raion, alert_type in new_state.items():
             if current_region_alerts.get(raion) != alert_type:
                 try:
-                    # Спочатку картинка
-                    with open("images/Alarm.jpg", "rb") as photo:
-                        await app.bot.send_photo(chat_id=int(CHAT_ID), photo=photo)
-                    # Потім текст з червоною мигалкою та жирним
-                    alert_text = ALERT_TYPES_UA.get(alert_type, alert_type)
-                    await app.bot.send_message(
-                        chat_id=int(CHAT_ID),
-                        text=f"🚨 *{raion}* — *{alert_text}*",
-                        parse_mode="Markdown"
-                    )
+                    if CHAT_ID:
+                        try:
+                            with open("images/Alarm.jpg", "rb") as photo:
+                                await app.bot.send_photo(chat_id=int(CHAT_ID), photo=photo)
+                        except Exception as e:
+                            logging.debug(f"Не вдалося відправити картинку: {e}")
+                        alert_text = ALERT_TYPES_UA.get(alert_type, alert_type)
+                        await app.bot.send_message(
+                            chat_id=int(CHAT_ID),
+                            text=f"🚨 *{raion}* — *{alert_text}*",
+                            parse_mode="Markdown",
+                        )
+                    else:
+                        logging.info(f"[НОТИФ] {raion} — {alert_type} (CHAT_ID не задано)")
                 except Exception as e:
                     logging.error(f"Помилка при відправці тривоги: {e}")
 
-        # ===== Відбої по районах =====
+        # Відбої по районах
         for raion, old_type in current_region_alerts.items():
             if raion not in new_state:
                 try:
-                    await app.bot.send_message(
-                        chat_id=int(CHAT_ID),
-                        text=f"✅ Відбій тривоги у *{raion}*",
-                        parse_mode="Markdown"
-                    )
+                    if CHAT_ID:
+                        await app.bot.send_message(
+                            chat_id=int(CHAT_ID),
+                            text=f"✅ Відбій тривоги у *{raion}*",
+                            parse_mode="Markdown",
+                        )
+                    else:
+                        logging.info(f"[ОБВІД] Відбій у {raion} (CHAT_ID не задано)")
                 except Exception as e:
                     logging.error(f"Помилка при відправці відбою по району: {e}")
 
-        # ===== Загальний відбій по області =====
+        # Загальний відбій по області
         if current_region_alerts and not new_state:
             try:
-                await app.bot.send_message(chat_id=int(CHAT_ID), text=f"✅ Відбій тривоги у {REGION}")
-                with open("images/Clear.jpg", "rb") as photo:
-                    await app.bot.send_photo(chat_id=int(CHAT_ID), photo=photo)
+                if CHAT_ID:
+                    await app.bot.send_message(chat_id=int(CHAT_ID), text=f"✅ Відбій тривоги у {REGION}")
+                    try:
+                        with open("images/Clear.jpg", "rb") as photo:
+                            await app.bot.send_photo(chat_id=int(CHAT_ID), photo=photo)
+                    except Exception as e:
+                        logging.debug(f"Не вдалося відправити картинку Clear: {e}")
+                else:
+                    logging.info(f"[ОБВІД ОБЛАСТІ] Відбій у {REGION} (CHAT_ID не задано)")
             except Exception as e:
                 logging.error(f"Помилка при відправці відбою по області: {e}")
 
@@ -170,19 +215,63 @@ async def poll_alerts(app):
         first_run = False
         await asyncio.sleep(POLL_INTERVAL)
 
+
+# ===== Команда аварійної зупинки (тільки для ADMIN_ID) =====
+async def stopbot(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if user_id != ADMIN_ID:
+        await update.message.reply_text("⛔️ Ця команда доступна лише адміністратору.")
+        return
+
+    await update.message.reply_text("🛑 Отримано команду зупинки. Виконую вимкнення...")
+    # Запускаємо shutdown як окрему задачу, щоб не блокувати хендлер
+    asyncio.create_task(_shutdown_sequence(context.application))
+
+
+async def _shutdown_sequence(app):
+    global _poll_task
+    logging.info("🔻 Shutdown requested by admin")
+
+    # 1) скасуємо фонову задачу опитування, якщо вона є
+    if _poll_task:
+        _poll_task.cancel()
+        try:
+            await asyncio.gather(_poll_task, return_exceptions=True)
+        except Exception:
+            pass
+
+    # 2) зупиняємо та шутдаун додатку (аккуратно)
+    try:
+        await app.shutdown()
+    except Exception as e:
+        logging.debug(f"Проблема під час app.shutdown(): {e}")
+    try:
+        await app.stop()
+    except Exception as e:
+        logging.debug(f"Проблема під час app.stop(): {e}")
+
+    logging.info("⚙️ Бот вимкнено адміністратором. Зупиняю event loop.")
+    # 3) зупиняємо event loop (це припинить run_forever у __main__)
+    loop = asyncio.get_event_loop()
+    loop.stop()
+
+
 # ===== Обробка помилок Telegram =====
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     logging.error(msg="Виникла помилка у хендлері:", exc_info=context.error)
     if update and hasattr(update, "message") and update.message:
         await update.message.reply_text("⚠️ Виникла внутрішня помилка бота. Спробуйте пізніше.")
 
+
 # ===== Основний цикл =====
 async def main():
+    global _poll_task
     nest_asyncio.apply()
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
     # ===== Хендлери команд і тексту =====
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("stopbot", stopbot))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex("(?i)що по області"), oblast_alerts))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex("(?i)як там крим"), krym_alerts))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex("(?i)що по києву"), kyiv_alerts))
@@ -192,12 +281,30 @@ async def main():
     app.add_error_handler(error_handler)
 
     # ===== Фонові задачі =====
-    asyncio.create_task(poll_alerts(app))
+    _poll_task = asyncio.create_task(poll_alerts(app))
 
-    print("✅ Бот запущено...")
-    await app.run_polling()
+    logging.info("✅ Бот запущено...")
+    # Запуск polling без автоматичного закриття loop (close_loop=False)
+    await app.run_polling(close_loop=False)
+
 
 # ===== Запуск =====
 if __name__ == "__main__":
+    # Використовуємо поточний event loop: запускаємо main як таску і тримаємо loop.run_forever()
     loop = asyncio.get_event_loop()
-    loop.run_until_complete(main())
+    try:
+        loop.create_task(main())
+        loop.run_forever()
+    except KeyboardInterrupt:
+        logging.info("🛑 Зупинка вручну (KeyboardInterrupt)")
+    finally:
+        # Далі коректно завершуємо всі таски
+        tasks = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+        for task in tasks:
+            task.cancel()
+        try:
+            loop.run_until_complete(asyncio.gather(*tasks, return_exceptions=True))
+        except Exception:
+            pass
+        loop.close()
+        logging.info("Loop closed. Exit.")
