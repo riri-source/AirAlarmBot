@@ -1,9 +1,12 @@
 import os
+from dataclasses import dataclass, field
 from threading import Thread
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import asyncio
 import nest_asyncio
 import logging
+from typing import Dict, Optional
+
 import aiohttp
 from dotenv import load_dotenv
 from telegram import Update
@@ -43,7 +46,7 @@ POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", 25))
 
 # CHAT_ID може бути задано як ENV або встановлюватись після /start
 CHAT_ID_ENV = os.getenv("CHAT_ID")
-CHAT_ID = int(CHAT_ID_ENV) if CHAT_ID_ENV else None
+DEFAULT_CHAT_ID = int(CHAT_ID_ENV) if CHAT_ID_ENV else None
 
 # Адмін для аварійної зупинки
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
@@ -61,9 +64,40 @@ ALERT_TYPES_UA = {
     "other": "Інша тривога",
 }
 
-# ===== Глобальні змінні для стану та тасків =====
-current_region_alerts = {}  # {район: тип тривоги}
-_poll_task = None  # посилання на фонову задачу опитування
+
+@dataclass
+class RegionAlertCache:
+    """Зберігає останній стан тривог по районах."""
+
+    last_alerts: Dict[str, str] = field(default_factory=dict)
+    initialized: bool = False
+
+
+def get_chat_id(app) -> Optional[int]:
+    """Повертає актуальний chat_id з bot_data, якщо він відомий."""
+
+    chat_id = app.bot_data.get("chat_id")
+    if chat_id is not None:
+        return int(chat_id)
+    default_chat = app.bot_data.get("default_chat_id")
+    return int(default_chat) if default_chat is not None else None
+
+
+async def send_photo_safe(bot, chat_id: Optional[int], image_path: str) -> bool:
+    """Надсилає зображення, якщо файл існує. Повертає True при успіху."""
+
+    if not chat_id:
+        return False
+
+    try:
+        with open(image_path, "rb") as photo:
+            await bot.send_photo(chat_id=chat_id, photo=photo)
+        return True
+    except FileNotFoundError:
+        logging.warning(f"Файл {image_path} не знайдено.")
+    except Exception as exc:  # noqa: BLE001
+        logging.debug(f"Не вдалося відправити {image_path}: {exc}")
+    return False
 
 
 # ===== Допоміжні функції =====
@@ -88,8 +122,8 @@ async def fetch_alerts(location_name, city_type="oblast"):
 
 # ===== Хендлери =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global CHAT_ID
-    CHAT_ID = update.effective_chat.id  # зберігаємо chat_id після першої команди /start
+    chat_id = update.effective_chat.id
+    context.application.bot_data["chat_id"] = chat_id  # зберігаємо chat_id після першої команди /start
     await update.message.reply_text(
         f"Привіт 🌸\nНапиши «Що по області» щоб дізнатись, де зараз тривога у {REGION}."
     )
@@ -152,68 +186,70 @@ async def frankivsk_alerts(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ===== Фонове опитування API =====
-async def poll_alerts(app):
-    global current_region_alerts
-    logging.info("🔁 Фонове опитування запущено")
-    first_run = True
-    while True:
-        alerts = await fetch_alerts(REGION)
-        new_state = {a.get("location_title"): a.get("alert_type") for a in alerts}
+async def process_alerts(app, cache: RegionAlertCache):
+    """Завантажує актуальні тривоги та розсилає оновлення у чат."""
 
-        # Нові тривоги по районах
-        for raion, alert_type in new_state.items():
-            if current_region_alerts.get(raion) != alert_type:
-                try:
-                    if CHAT_ID:
-                        try:
-                            with open("images/Alarm.jpg", "rb") as photo:
-                                await app.bot.send_photo(chat_id=int(CHAT_ID), photo=photo)
-                        except Exception as e:
-                            logging.debug(f"Не вдалося відправити картинку: {e}")
-                        alert_text = ALERT_TYPES_UA.get(alert_type, alert_type)
-                        await app.bot.send_message(
-                            chat_id=int(CHAT_ID),
-                            text=f"🚨 *{raion}* — *{alert_text}*",
-                            parse_mode="Markdown",
-                        )
-                    else:
-                        logging.info(f"[НОТИФ] {raion} — {alert_type} (CHAT_ID не задано)")
-                except Exception as e:
-                    logging.error(f"Помилка при відправці тривоги: {e}")
+    alerts = await fetch_alerts(REGION)
+    new_state = {a.get("location_title"): a.get("alert_type") for a in alerts}
 
-        # Відбої по районах
-        for raion, old_type in current_region_alerts.items():
-            if raion not in new_state:
-                try:
-                    if CHAT_ID:
-                        await app.bot.send_message(
-                            chat_id=int(CHAT_ID),
-                            text=f"✅ Відбій тривоги у *{raion}*",
-                            parse_mode="Markdown",
-                        )
-                    else:
-                        logging.info(f"[ОБВІД] Відбій у {raion} (CHAT_ID не задано)")
-                except Exception as e:
-                    logging.error(f"Помилка при відправці відбою по району: {e}")
+    # Перший запуск: просто запам'ятовуємо поточний стан, щоб не дублювати "старі" тривоги
+    if not cache.initialized:
+        cache.last_alerts = new_state
+        cache.initialized = True
+        logging.debug("Ініціалізовано стан тривог без сповіщень.")
+        return
 
-        # Загальний відбій по області
-        if current_region_alerts and not new_state:
-            try:
-                if CHAT_ID:
-                    await app.bot.send_message(chat_id=int(CHAT_ID), text=f"✅ Відбій тривоги у {REGION}")
-                    try:
-                        with open("images/Clear.jpg", "rb") as photo:
-                            await app.bot.send_photo(chat_id=int(CHAT_ID), photo=photo)
-                    except Exception as e:
-                        logging.debug(f"Не вдалося відправити картинку Clear: {e}")
-                else:
-                    logging.info(f"[ОБВІД ОБЛАСТІ] Відбій у {REGION} (CHAT_ID не задано)")
-            except Exception as e:
-                logging.error(f"Помилка при відправці відбою по області: {e}")
+    chat_id = get_chat_id(app)
 
-        current_region_alerts = new_state
-        first_run = False
-        await asyncio.sleep(POLL_INTERVAL)
+    # Нові тривоги по районах
+    for raion, alert_type in new_state.items():
+        if cache.last_alerts.get(raion) == alert_type:
+            continue
+
+        try:
+            if chat_id:
+                await send_photo_safe(app.bot, chat_id, "images/Alarm.jpg")
+                alert_text = ALERT_TYPES_UA.get(alert_type, alert_type)
+                await app.bot.send_message(
+                    chat_id=chat_id,
+                    text=f"🚨 *{raion}* — *{alert_text}*",
+                    parse_mode="Markdown",
+                )
+            else:
+                alert_text = ALERT_TYPES_UA.get(alert_type, alert_type)
+                logging.info(f"[НОТИФ] {raion} — {alert_text} (CHAT_ID не задано)")
+        except Exception as e:  # noqa: BLE001
+            logging.error(f"Помилка при відправці тривоги: {e}")
+
+    # Відбої по районах
+    for raion, old_type in cache.last_alerts.items():
+        if raion in new_state:
+            continue
+
+        try:
+            if chat_id:
+                await app.bot.send_message(
+                    chat_id=chat_id,
+                    text=f"✅ Відбій тривоги у *{raion}*",
+                    parse_mode="Markdown",
+                )
+            else:
+                logging.info(f"[ОБВІД] Відбій у {raion} (CHAT_ID не задано)")
+        except Exception as e:  # noqa: BLE001
+            logging.error(f"Помилка при відправці відбою по району: {e}")
+
+    # Загальний відбій по області
+    if cache.last_alerts and not new_state:
+        try:
+            if chat_id:
+                await app.bot.send_message(chat_id=chat_id, text=f"✅ Відбій тривоги у {REGION}")
+                await send_photo_safe(app.bot, chat_id, "images/Clear.jpg")
+            else:
+                logging.info(f"[ОБВІД ОБЛАСТІ] Відбій у {REGION} (CHAT_ID не задано)")
+        except Exception as e:  # noqa: BLE001
+            logging.error(f"Помилка при відправці відбою по області: {e}")
+
+    cache.last_alerts = new_state
 
 
 # ===== Команда аварійної зупинки (тільки для ADMIN_ID) =====
@@ -229,16 +265,13 @@ async def stopbot(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def _shutdown_sequence(app):
-    global _poll_task
     logging.info("🔻 Shutdown requested by admin")
 
-    # 1) скасуємо фонову задачу опитування, якщо вона є
-    if _poll_task:
-        _poll_task.cancel()
-        try:
-            await asyncio.gather(_poll_task, return_exceptions=True)
-        except Exception:
-            pass
+    # 1) зупиняємо job_queue, щоб не залишити повторювані задачі
+    try:
+        app.job_queue.stop()
+    except Exception as e:
+        logging.debug(f"Проблема під час job_queue.stop(): {e}")
 
     # 2) зупиняємо та шутдаун додатку (аккуратно)
     try:
@@ -265,9 +298,15 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
 
 # ===== Основний цикл =====
 async def main():
-    global _poll_task
     nest_asyncio.apply()
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+
+    if DEFAULT_CHAT_ID is not None:
+        app.bot_data["chat_id"] = DEFAULT_CHAT_ID
+        app.bot_data["default_chat_id"] = DEFAULT_CHAT_ID
+
+    alert_cache = RegionAlertCache()
+    app.bot_data["alert_cache"] = alert_cache
 
     # ===== Хендлери команд і тексту =====
     app.add_handler(CommandHandler("start", start))
@@ -281,7 +320,11 @@ async def main():
     app.add_error_handler(error_handler)
 
     # ===== Фонові задачі =====
-    _poll_task = asyncio.create_task(poll_alerts(app))
+    async def _job_callback(context: ContextTypes.DEFAULT_TYPE):
+        cache: RegionAlertCache = context.application.bot_data.setdefault("alert_cache", RegionAlertCache())
+        await process_alerts(context.application, cache)
+
+    app.job_queue.run_repeating(_job_callback, interval=POLL_INTERVAL, first=0)
 
     logging.info("✅ Бот запущено...")
     # Запуск polling без автоматичного закриття loop (close_loop=False)
