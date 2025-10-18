@@ -63,6 +63,7 @@ ALERT_TYPES_UA = {
 
 # ===== Глобальні змінні для стану та тасків =====
 current_region_alerts = {}  # {район: тип тривоги}
+alerts_initialized = False
 
 
 # ===== Допоміжні функції =====
@@ -153,10 +154,17 @@ async def frankivsk_alerts(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ===== Фонове опитування API =====
 async def process_alerts(app):
     """Завантажує актуальні тривоги та розсилає оновлення у чат."""
-    global current_region_alerts
+    global current_region_alerts, alerts_initialized
 
     alerts = await fetch_alerts(REGION)
     new_state = {a.get("location_title"): a.get("alert_type") for a in alerts}
+
+    # Перший запуск: просто запам'ятовуємо поточний стан, щоб не дублювати "старі" тривоги
+    if not alerts_initialized:
+        current_region_alerts = new_state
+        alerts_initialized = True
+        logging.debug("Ініціалізовано стан тривог без сповіщень.")
+        return
 
     # Нові тривоги по районах
     for raion, alert_type in new_state.items():
