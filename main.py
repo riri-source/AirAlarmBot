@@ -6,9 +6,8 @@ import nest_asyncio
 from dataclasses import dataclass, field
 from threading import Thread
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from typing import Dict, Optional, Set
+from typing import Dict, Optional
 from datetime import datetime
-
 import aiohttp
 from dotenv import load_dotenv
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
@@ -55,11 +54,11 @@ def run_http_server():
 Thread(target=run_http_server, daemon=True).start()
 
 # ======================================================
-# 🔹 Класи/словники/хелпери
+# 🔹 Класи та хелпери
 # ======================================================
 @dataclass
 class RegionAlertCache:
-    last_alerts: Dict[str, str] = field(default_factory=dict)
+    last_alerts: Dict[str, str] = field(default_factory=dict)   # ключ: "Область::Район/Громада/Назва"
     initialized: bool = False
 
 ALERT_TYPES_UA = {
@@ -69,45 +68,10 @@ ALERT_TYPES_UA = {
     "other": "Інша тривога",
 }
 
-KYIV_OBLAST_NAMES: Set[str] = {"Київська область", "м. Київ"}
-
-OBLASTS_ALL = [
-    "Автономна Республіка Крим",
-    "Вінницька область",
-    "Волинська область",
-    "Дніпропетровська область",
-    "Донецька область",
-    "Житомирська область",
-    "Закарпатська область",
-    "Запорізька область",
-    "Івано-Франківська область",
-    "Київська область",
-    "м. Київ",
-    "Кіровоградська область",
-    "Луганська область",
-    "Львівська область",
-    "Миколаївська область",
-    "Одеська область",
-    "Полтавська область",
-    "Рівненська область",
-    "Сумська область",
-    "Тернопільська область",
-    "Харківська область",
-    "Херсонська область",
-    "Хмельницька область",
-    "Черкаська область",
-    "Чернівецька область",
-    "Чернігівська область",
-]
-
 KYIV_SUBREGIONS = [
-    "Вишгородський район",
-    "Бучанський район",
-    "Фастівський район",
-    "Броварський район",
-    "Бориспільський район",
-    "Обухівський район",
-    "Білоцерківський район",
+    "Вишгородський район", "Бучанський район", "Фастівський район",
+    "Броварський район", "Бориспільський район",
+    "Обухівський район", "Білоцерківський район"
 ]
 
 def get_chat_id(app) -> Optional[int]:
@@ -133,28 +97,10 @@ async def _get_api_data():
             return await resp.json()
 
 # ======================================================
-# 🔹 Словник локацій (JSON) — завантаження/збереження
-# ======================================================
-def dict_path() -> str:
-    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "locations_dict.json")
-
-def load_locations_dict() -> Dict:
-    path = dict_path()
-    if not os.path.exists(path):
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump({"Київська область": {}}, f, ensure_ascii=False, indent=2)
-    with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
-
-def save_locations_dict(data: Dict):
-    path = dict_path()
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-
-# ======================================================
-# 🔹 Службові: список областей → адміну
+# 🔹 Службові (для адміну)
 # ======================================================
 async def send_all_oblasts_to_admin(bot, admin_id: int):
+    """Надсилає адміну список усіх областей, які бачить API."""
     try:
         data = await _get_api_data()
         oblasts = sorted({a.get("location_oblast") for a in data.get("alerts", []) if a.get("location_oblast")})
@@ -167,78 +113,86 @@ async def send_all_oblasts_to_admin(bot, admin_id: int):
         await bot.send_message(chat_id=admin_id, text=f"❌ Помилка при запиті до API:\n{e}")
 
 # ======================================================
-# 🔹 Глобальний МРЧ (вся Україна) + окремий МРЧ для Київщини
+# 🔹 Завантаження / збереження зовнішнього словника
 # ======================================================
-async def process_alerts(app, cache_global: RegionAlertCache, cache_kyiv: RegionAlertCache):
-    """
-    - Адміну (ADMIN_ID): сповіщення про всі області (глобальний моніторинг).
-    - Групі (CHAT_ID): лише Київська область і м. Київ + картинки на початок тривоги.
-    - Окремий кеш для Київщини, щоб коректно відпрацьовувати "загальний відбій по області".
-    """
+def _dict_path() -> str:
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "locations_dict.json")
+
+def load_locations_dict() -> Dict:
+    fp = _dict_path()
+    if not os.path.exists(fp):
+        with open(fp, "w", encoding="utf-8") as f:
+            json.dump({"Київська область": {}}, f, ensure_ascii=False, indent=2)
+    with open(fp, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+def save_locations_dict(data: Dict):
+    fp = _dict_path()
+    with open(fp, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+# ======================================================
+# 🔹 Глобальний моніторинг (вся Україна) + група лише Київщина
+# ======================================================
+async def process_alerts(app, cache: RegionAlertCache):
     data = await _get_api_data()
     alerts = data.get("alerts", [])
-
-    # Глобальний стан: ключ "<область>::<title>" -> type
-    new_state_global = {f"{a['location_oblast']}::{a['location_title']}": a["alert_type"] for a in alerts}
-
-    # Київський стан: лише по Київщині, ключ "<title>" -> type
-    relevant_kyiv = [a for a in alerts if a.get("location_oblast") in KYIV_OBLAST_NAMES]
-    new_state_kyiv = {a["location_title"]: a["alert_type"] for a in relevant_kyiv}
+    new_state = {f"{a['location_oblast']}::{a['location_title']}": a["alert_type"] for a in alerts}
 
     chat_id = get_chat_id(app)
     admin_chat = int(ADMIN_ID)
     now = datetime.now().strftime("%H:%M:%S")
-    logging.info(f"⏱ Перевірка API @ {now} (UA={len(new_state_global)}, KYIV={len(new_state_kyiv)})")
+    logging.info(f"⏱ Перевірка API @ {now} ({len(new_state)} активних тривог)")
 
-    # --- ПЕРШИЙ ЗАПУСК ---
-    if not cache_global.initialized:
-        cache_global.last_alerts = new_state_global
-        cache_global.initialized = True
-    if not cache_kyiv.initialized:
-        cache_kyiv.last_alerts = new_state_kyiv
-        cache_kyiv.initialized = True
-        return  # перший цикл — без сповіщень, щоб не спамити старим станом
+    # Для словникового аддону кеш Київщини зручно мати окремо
+    app.bot_data["kyiv_current_keys"] = {k for k in new_state.keys() if k.startswith("Київська область::") or k.startswith("м. Київ::")}
 
-    # --- ГЛОБАЛЬНІ СПОВІЩЕННЯ (адміну) ---
-    # Нові або змінені
-    for key, alert_type in new_state_global.items():
-        if cache_global.last_alerts.get(key) != alert_type and admin_chat:
-            oblast, title = key.split("::")
-            text = f"🚨 {oblast} — {title}: {ALERT_TYPES_UA.get(alert_type, alert_type)}"
-            await app.bot.send_message(chat_id=admin_chat, text=text)
-    # Відбої
-    for key in list(cache_global.last_alerts.keys()):
-        if key not in new_state_global and admin_chat:
-            oblast, title = key.split("::")
-            text = f"✅ Відбій тривоги у {oblast} — {title}"
-            await app.bot.send_message(chat_id=admin_chat, text=text)
+    if not cache.initialized:
+        cache.last_alerts = new_state
+        cache.initialized = True
+        return
 
-    # --- СПОВІЩЕННЯ ДЛЯ ГРУПИ (лише Київщина) ---
-    # Нові або змінені
-    for title, alert_type in new_state_kyiv.items():
-        if cache_kyiv.last_alerts.get(title) != alert_type and chat_id:
+    # Нові/змінені
+    for key, alert_type in new_state.items():
+        if cache.last_alerts.get(key) == alert_type:
+            continue
+        oblast, title = key.split("::", 1)
+        text = f"🚨 *{oblast}* — {title}: *{ALERT_TYPES_UA.get(alert_type, alert_type)}*"
+
+        # адміністратор — все
+        if admin_chat:
+            await app.bot.send_message(chat_id=admin_chat, text=text, parse_mode="Markdown")
+
+        # група — лише Київщина (з картинкою)
+        if chat_id and (oblast in {"Київська область", "м. Київ"}):
             await send_photo_safe(app.bot, chat_id, "images/Alarm.jpg")
-            text = f"🚨 *{title}* — *{ALERT_TYPES_UA.get(alert_type, alert_type)}*"
             await app.bot.send_message(chat_id=chat_id, text=text, parse_mode="Markdown")
 
-    # Відбої по районах Київщини
-    for title in list(cache_kyiv.last_alerts.keys()):
-        if title not in new_state_kyiv and chat_id:
-            await app.bot.send_message(chat_id=chat_id, text=f"✅ Відбій тривоги у *{title}*", parse_mode="Markdown")
+    # Відбої
+    for key in list(cache.last_alerts.keys()):
+        if key not in new_state:
+            oblast, title = key.split("::", 1)
+            text = f"✅ Відбій тривоги у *{oblast}* — {title}"
+            if admin_chat:
+                await app.bot.send_message(chat_id=admin_chat, text=text, parse_mode="Markdown")
+            if chat_id and (oblast in {"Київська область", "м. Київ"}):
+                await app.bot.send_message(chat_id=chat_id, text=text, parse_mode="Markdown")
 
-    # Загальний відбій по Київській області (коли останній район погас)
-    if cache_kyiv.last_alerts and not new_state_kyiv and chat_id:
-        await app.bot.send_message(chat_id=chat_id, text=f"✅ Відбій тривоги у {REGION}")
-        await send_photo_safe(app.bot, chat_id, "images/Clear.jpg")
+    # Загальний відбій по області (картинка) — лише для Київщини
+    # Якщо раніше були ключі Київщини, а тепер жодного
+    if chat_id:
+        had_kyiv = any(k.startswith("Київська область::") or k.startswith("м. Київ::") for k in cache.last_alerts.keys())
+        has_kyiv = any(k.startswith("Київська область::") or k.startswith("м. Київ::") for k in new_state.keys())
+        if had_kyiv and not has_kyiv:
+            await app.bot.send_message(chat_id=chat_id, text=f"✅ Відбій тривоги у {REGION}")
+            await send_photo_safe(app.bot, chat_id, "images/Clear.jpg")
 
-    # Оновлюємо кеші
-    cache_global.last_alerts = new_state_global
-    cache_kyiv.last_alerts  = new_state_kyiv
+    cache.last_alerts = new_state
 
 # ======================================================
-# 🔹 Ручні запити по областях/містах
+# 🔹 Ручні запити (як було у v6)
 # ======================================================
-async def _region_status_contains(keyword: str) -> bool:
+async def _region_status(keyword: str) -> bool:
     data = await _get_api_data()
     kw = keyword.lower()
     for a in data.get("alerts", []):
@@ -250,215 +204,200 @@ async def _region_status_contains(keyword: str) -> bool:
     return False
 
 async def krym_alerts(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    active = await _region_status_contains("крим")
+    active = await _region_status("крим")
     await update.message.reply_text("🚨 У Криму триває тривога!" if active else "✅ У Криму зараз все чисто.")
 
 async def odesa_alerts(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    active = await _region_status_contains("одес")
+    active = await _region_status("одес")
     await update.message.reply_text("🚨 В Одеській області триває тривога!" if active else "✅ В Одеській області зараз все чисто.")
 
 async def oblast_alerts(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    active = await _region_status_contains("київська")
+    active = await _region_status("київська")
     await update.message.reply_text("🚨 У Київській області триває тривога!" if active else "✅ У Київській області зараз все чисто.")
 
 async def kyiv_alerts(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    active = await _region_status_contains("київ")
+    active = await _region_status("київ")
     await update.message.reply_text("🚨 У Києві триває тривога!" if active else "✅ У Києві зараз все чисто.")
 
 async def lugansk_alerts(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    active = await _region_status_contains("луган")
+    active = await _region_status("луган")
     await update.message.reply_text("🚨 У Луганській області триває тривога!" if active else "✅ У Луганській області зараз все чисто.")
 
 async def chernihiv_alerts(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    active = await _region_status_contains("черніг")
+    active = await _region_status("черніг")
     await update.message.reply_text("🚨 У Чернігівській області триває тривога!" if active else "✅ У Чернігівській області зараз все чисто.")
 
 async def frankivsk_alerts(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    active = await _region_status_contains("франк")
+    active = await _region_status("франк")
     await update.message.reply_text("🚨 В Івано-Франківській області триває тривога!" if active else "✅ В Івано-Франківській області зараз все чисто.")
 
 # ======================================================
-# 🔹 СЛОВНИКОВІ ЗАПИТИ + АДДОН “Соціальне навчання”
+# 🔹 Словниковий запит + соціальне навчання (аддон)
 # ======================================================
-def get_kyiv_dict(app) -> Dict[str, str]:
-    """Повертає мапу alias -> 'Район Київщини' (лише розділ Київської області)."""
-    return app.bot_data.get("locations_dict", {}).get("Київська область", {})
+def _normalize(s: str) -> str:
+    return " ".join((s or "").lower().replace("?", "").replace("!", "").strip().split())
 
 async def handle_dynamic_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обробка 'що по <х>' зі словника; якщо НП невідомий — пропозиція надіслати адміну."""
-    text_raw = update.message.text or ""
-    text = text_raw.lower().strip()
-    if not text.startswith("що по"):
+    """'що по <назві>' — шукаємо у словнику Київщини; якщо не знайдено — пропонуємо надіслати адміну."""
+    text = (update.message.text or "")
+    if not text.lower().startswith("що по"):
         return
 
-    # Відсікаємо спеціальні фрази (ручні хендлери)
-    guard_phrases = [
-        "що по області", "що по києву", "як там крим", "що по одес", "що по луган",
-        "що по франику", "що по івано-франківську", "що по франківську", "що по черніг"
-    ]
-    if any(p in text for p in guard_phrases):
+    keyword = _normalize(text.replace("що по", "", 1))
+    if not keyword:
         return
 
-    kyiv_map = get_kyiv_dict(context.application)
-    keyword = text.replace("що по", "").replace("?", "").strip().lower()
+    locations = context.application.bot_data.get("locations_dict", {}).get("Київська область", {})
 
-    # спроба точного/часткового збігу по словнику Київщини
+    # пошук точний або частковий
     region = None
-    for alias, subregion in kyiv_map.items():
-        if keyword == alias.lower() or keyword in alias.lower():
-            region = subregion
+    for k, v in locations.items():
+        if keyword == _normalize(k) or keyword in _normalize(k):
+            region = v
             break
 
     if region:
-        # відповідаємо за МРЧ-станом Київщини
-        cache_kyiv: RegionAlertCache = context.application.bot_data.get("cache_kyiv", RegionAlertCache())
-        active_kyiv = cache_kyiv.last_alerts or {}
-        if region in active_kyiv:
-            await update.message.reply_text(f"🚨 У {region} триває тривога!")
-        else:
-            await update.message.reply_text(f"✅ У {region} зараз все спокійно.")
+        # використовуємо поточний стан із кешу Київщини (без додзапитів)
+        active_keys = context.application.bot_data.get("kyiv_current_keys", set())
+        # регіон в new_state має вигляд "Київська область::Бучанський район" тощо
+        is_active = any(f"Київська область::{region}" in key or f"м. Київ::{region}" in key for key in active_keys)
+        await update.message.reply_text(f"🚨 У {region} триває тривога!" if is_active else f"✅ У {region} зараз все спокійно.")
         return
 
-    # --- Невідомий НП: пропонуємо надіслати адміну ---
-    markup = ReplyKeyboardMarkup(
-        [[KeyboardButton("Так"), KeyboardButton("Ні")]],
-        one_time_keyboard=True, resize_keyboard=True
-    )
+    # Не знайшли — питаємо користувача, чи надсилати адміну
+    markup = ReplyKeyboardMarkup([[KeyboardButton("Так"), KeyboardButton("Ні")]], one_time_keyboard=True, resize_keyboard=True)
     await update.message.reply_text(
         "🤔 Не знаю такого населеного пункту. Надіслати на розгляд адміну групи щоб додати? (так/ні)",
         reply_markup=markup,
     )
-    # Запам'ятовуємо пропозицію для цього користувача
+    # збережемо запит саме за цим користувачем
     context.user_data["pending_location"] = keyword
 
-async def user_yes_no(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Користувацька відповідь Так/Ні щодо пропозиції нового НП."""
-    ans = (update.message.text or "").strip().lower()
-    if ans not in {"так", "ні"}:
+async def user_send_to_admin_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Користувач відповідає 'так/ні' на пропозицію надіслати адміну."""
+    txt = (update.message.text or "").strip().lower()
+    if txt not in {"так", "ні"}:
         return
-    keyword = context.user_data.get("pending_location")
-    if not keyword:
+    pending = context.user_data.pop("pending_location", None)
+    if not pending:
         return
-
-    if ans == "ні":
+    if txt == "ні":
         await update.message.reply_text("🙂 Добре, не надсилатиму адміну.")
-        context.user_data.pop("pending_location", None)
         return
 
-    # "так": відправляємо адміну з кнопками, вшиваємо ключове слово в текст
+    # надсилаємо адміну й фіксуємо останню пропозицію у bot_data (спрощено — остання активна)
+    context.application.bot_data["admin_pending_name"] = pending
     await context.bot.send_message(
         chat_id=ADMIN_ID,
-        text=f"📩 Новий населений пункт запропоновано користувачем:\n<b>{keyword.title()}</b>\nДодати до словника?",
+        text=f"📩 Новий населений пункт запропоновано користувачем:\n<b>{pending.title()}</b>\nДодати до словника?",
         parse_mode="HTML",
         reply_markup=ReplyKeyboardMarkup(
-            [[KeyboardButton(f"✅ Додати: {keyword}"), KeyboardButton(f"❌ Ігнорувати: {keyword}")]],
+            [[KeyboardButton("✅ Додати"), KeyboardButton("❌ Ігнорувати")]],
             resize_keyboard=True
         ),
     )
     await update.message.reply_text("✅ Надіслано адміну на розгляд.")
-    context.user_data.pop("pending_location", None)
 
-async def admin_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Адмін підтверджує/ігнорує пропозицію, далі — вибір області/району."""
+async def admin_add_ignore(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Адмін обирає: додати / ігнорувати."""
     if update.effective_user.id != ADMIN_ID:
         return
-    text = (update.message.text or "").strip()
-
-    # Очікуємо формат "✅ Додати: <keyword>" або "❌ Ігнорувати: <keyword>"
-    if text.startswith("❌ Ігнорувати:"):
+    txt = (update.message.text or "").strip()
+    if txt not in {"✅ Додати", "❌ Ігнорувати"}:
+        return
+    name = context.application.bot_data.get("admin_pending_name")
+    if not name:
+        await update.message.reply_text("ℹ️ Немає активної пропозиції до додавання.")
+        return
+    if txt == "❌ Ігнорувати":
+        context.application.bot_data.pop("admin_pending_name", None)
         await update.message.reply_text("🚫 Пропозицію відхилено.")
         return
 
-    if not text.startswith("✅ Додати:"):
-        return
+    # ✅ Додати — питаємо область (зі списку, що реально приходить з API)
+    try:
+        data = await _get_api_data()
+        oblasts = sorted({a.get("location_oblast") for a in data.get("alerts", []) if a.get("location_oblast")})
+        # гарантуємо Київську, навіть якщо тимчасово немає у фіді
+        if "Київська область" not in oblasts:
+            oblasts.insert(0, "Київська область")
+    except Exception:
+        oblasts = ["Київська область"]
+    markup = ReplyKeyboardMarkup([[KeyboardButton(o)] for o in oblasts], resize_keyboard=True)
+    await update.message.reply_text(f"🌍 Оберіть область для «{name.title()}»:", reply_markup=markup)
+    context.application.bot_data["await_region_for"] = name
 
-    keyword = text.split(":", 1)[1].strip()
-    # Зберігаємо в bot_data, з ким працюємо
-    context.application.bot_data["pending_keyword"] = keyword
-
-    # Показуємо клавіатуру з областями (статичний список)
-    rows = [[KeyboardButton(o)] for o in OBLASTS_ALL]
-    await update.message.reply_text(
-        f"🌍 Оберіть область для «{keyword.title()}»:",
-        reply_markup=ReplyKeyboardMarkup(rows, resize_keyboard=True)
-    )
-    context.application.bot_data["await_region"] = True
-
-async def region_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Адмін обирає область; якщо це Київська — просимо ще район, інакше додаємо одразу."""
+async def admin_region_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Адмін вибирає область; якщо Київська — додатково просимо район."""
     if update.effective_user.id != ADMIN_ID:
         return
-    if not context.application.bot_data.get("await_region"):
+    region_txt = (update.message.text or "").strip()
+    name = context.application.bot_data.get("await_region_for")
+    if not name:
         return
 
-    region = (update.message.text or "").strip()
-    keyword = context.application.bot_data.get("pending_keyword")
-    if not keyword or not region:
+    if region_txt == "Київська область":
+        # обрати район
+        markup = ReplyKeyboardMarkup([[KeyboardButton(r)] for r in KYIV_SUBREGIONS], resize_keyboard=True)
+        await update.message.reply_text(f"🏞️ До якого району належить «{name.title()}»?", reply_markup=markup)
+        context.application.bot_data["await_subregion_for"] = name
+        context.application.bot_data.pop("await_region_for", None)
         return
 
-    context.application.bot_data["await_region"] = False
-    context.application.bot_data["chosen_region"] = region
+    # інша область: записуємо "назва НП -> область" як базовий таргет
+    locations = load_locations_dict()
+    # Структура словника: для Київщини — мапа псевдонімів у район.
+    # Для інших областей збережемо під ключем "Інші області" просту мапу до області.
+    # Щоб не ламати існуючу логіку, просто заведемо секцію з назвою області теж як розділ.
+    section = region_txt
+    locations.setdefault(section, {})
+    locations[section][name] = section  # базово відповідаємо на рівні області
+    save_locations_dict(locations)
+    context.application.bot_data["locations_dict"] = locations
+    context.application.bot_data.pop("await_region_for", None)
+    context.application.bot_data.pop("admin_pending_name", None)
+    await update.message.reply_text(f"✅ Додано: {name.title()} → {section}")
 
-    if region == "Київська область":
-        rows = [[KeyboardButton(r)] for r in KYIV_SUBREGIONS]
-        await update.message.reply_text(
-            f"🏞️ До якого району належить «{keyword.title()}»?",
-            reply_markup=ReplyKeyboardMarkup(rows, resize_keyboard=True)
-        )
-        context.application.bot_data["await_subregion"] = True
-        return
-
-    # Інша область: додаємо у відповідний розділ словника (для майбутнього використання)
-    data = load_locations_dict()
-    if region not in data:
-        data[region] = {}
-    # зберігаємо як просту відповідність alias->область
-    data[region][keyword] = region
-    save_locations_dict(data)
-    context.application.bot_data["locations_dict"] = data
-
-    await update.message.reply_text(f"🆕 Додано: {keyword.title()} → {region}")
-    # Чистимо стан
-    context.application.bot_data.pop("pending_keyword", None)
-    context.application.bot_data.pop("chosen_region", None)
-
-async def subregion_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Адмін обирає район Київської області — запис у словник Київщини."""
+async def admin_subregion_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Адмін вибирає район Київської області — дописуємо у словник секції 'Київська область'."""
     if update.effective_user.id != ADMIN_ID:
         return
-    if not context.application.bot_data.get("await_subregion"):
+    subr = (update.message.text or "").strip()
+    name = context.application.bot_data.get("await_subregion_for")
+    if not name:
         return
+    if subr not in KYIV_SUBREGIONS:
+        return  # ігноруємо сторонні репліки
 
-    subregion = (update.message.text or "").strip()
-    if subregion not in KYIV_SUBREGIONS:
-        return
+    locations = load_locations_dict()
+    locations.setdefault("Київська область", {})
+    locations["Київська область"][name] = subr
+    save_locations_dict(locations)
+    context.application.bot_data["locations_dict"] = locations
 
-    keyword = context.application.bot_data.get("pending_keyword")
-    if not keyword:
-        return
-
-    data = load_locations_dict()
-    if "Київська область" not in data:
-        data["Київська область"] = {}
-    data["Київська область"][keyword] = subregion
-    save_locations_dict(data)
-    context.application.bot_data["locations_dict"] = data
-
-    await update.message.reply_text(f"🆕 Додано: {keyword.title()} → {subregion}")
-
-    # Чистимо стан
-    context.application.bot_data.pop("await_subregion", None)
-    context.application.bot_data.pop("pending_keyword", None)
-    context.application.bot_data.pop("chosen_region", None)
+    context.application.bot_data.pop("await_subregion_for", None)
+    context.application.bot_data.pop("admin_pending_name", None)
+    await update.message.reply_text(f"🆕 Додано: {name.title()} → {subr}")
 
 # ======================================================
-# 🔹 Команди /start /stopbot /list_regions
+# 🔹 /list_regions
+# ======================================================
+async def list_regions(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if user_id != ADMIN_ID:
+        await update.message.reply_text("⛔️ Ця команда лише для адміністратора.")
+        return
+    await update.message.reply_text("⏳ Отримую список областей...")
+    await send_all_oblasts_to_admin(context.bot, ADMIN_ID)
+
+# ======================================================
+# 🔹 Базові команди
 # ======================================================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.application.bot_data["chat_id"] = update.effective_chat.id
     await update.message.reply_text(
         "Привіт 🌸\n"
-        "Група отримує тривоги по Київській області, адміністратор — по всій Україні.\n"
+        "Я повідомляю про тривоги у Київській області (група) та по всій Україні (адміну).\n"
         "Можеш спробувати: «що по ірпеню?» або «що по борисполю?»"
     )
 
@@ -478,13 +417,6 @@ async def _shutdown_sequence(app):
         pass
     asyncio.get_event_loop().stop()
 
-async def list_regions(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        await update.message.reply_text("⛔️ Ця команда лише для адміністратора.")
-        return
-    await update.message.reply_text("⏳ Отримую список областей...")
-    await send_all_oblasts_to_admin(context.bot, ADMIN_ID)
-
 async def error_handler(update, context):
     logging.error("Помилка:", exc_info=context.error)
     if update and hasattr(update, "message") and update.message:
@@ -501,15 +433,11 @@ async def main():
         app.bot_data["chat_id"] = DEFAULT_CHAT_ID
         app.bot_data["default_chat_id"] = DEFAULT_CHAT_ID
 
-    # Кеші: глобальний та Київщина — окремо!
-    cache_global = RegionAlertCache()
-    cache_kyiv   = RegionAlertCache()
-    app.bot_data["cache_kyiv"] = cache_kyiv
-
-    # Словник
+    cache = RegionAlertCache()
+    app.bot_data["alert_cache"] = cache
     app.bot_data["locations_dict"] = load_locations_dict()
 
-    # Одноразово — список областей адміну
+    # Одноразово: покажемо адміну список областей
     await send_all_oblasts_to_admin(app.bot, ADMIN_ID)
 
     # Команди
@@ -517,7 +445,7 @@ async def main():
     app.add_handler(CommandHandler("stopbot", stopbot))
     app.add_handler(CommandHandler("list_regions", list_regions))
 
-    # Ручні запити (специфічні) — ДО загального словникового
+    # Ручні запити (як раніше)
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex("(?i)що по області"), oblast_alerts))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex("(?i)що по києву"), kyiv_alerts))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex("(?i)як там крим"), krym_alerts))
@@ -528,24 +456,24 @@ async def main():
 
     # Словниковий запит
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex("(?i)^що по "), handle_dynamic_query))
-    # Соціальне навчання: відповідь користувача “так/ні”
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex("(?i)^(так|ні)$"), user_yes_no))
-    # Підтвердження адміном
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^(✅ Додати: .+|❌ Ігнорувати: .+)$"), admin_choice))
-    # Вибір області адміном
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^(" + "|".join(map(lambda s: s.replace('.', r'\.'), OBLASTS_ALL)) + r")$"), region_selected))
-    # Вибір району Київщини адміном
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^(" + "|".join(KYIV_SUBREGIONS) + r")$"), subregion_selected))
+    # Відповідь користувача так/ні
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex("(?i)^(так|ні)$"), user_send_to_admin_choice))
+    # Адмін: додати/ігнорувати
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^(✅ Додати|❌ Ігнорувати)$"), admin_add_ignore))
+    # Адмін: вибір області
+    app.add_handler(MessageHandler(filters.TEXT & (~filters.Regex(r"^(✅ Додати|❌ Ігнорувати)$") & ~filters.Regex("(?i)^(так|ні)$")), admin_region_selected))
+    # Адмін: вибір району Київщини
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex("|".join(KYIV_SUBREGIONS)), admin_subregion_selected))
 
     app.add_error_handler(error_handler)
 
     async def _poll(context: ContextTypes.DEFAULT_TYPE):
-        await process_alerts(context.application, cache_global, cache_kyiv)
+        await process_alerts(context.application, cache)
 
     app.job_queue.run_repeating(_poll, interval=POLL_INTERVAL, first=0)
     app.job_queue.start()
 
-    logging.info("✅ KytsjaAlarm Stable_v6 + SocialLearning аддон — запущено.")
+    logging.info("✅ KytsjaAlarm v6 + SocialDictionary Add-on запущено.")
     await app.run_polling(close_loop=False)
 
 # ======================================================
