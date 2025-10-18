@@ -1,7 +1,7 @@
 import os
 import asyncio
-import nest_asyncio
 import logging
+import nest_asyncio
 from dataclasses import dataclass, field
 from threading import Thread
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -142,9 +142,8 @@ async def process_alerts(app, cache: RegionAlertCache):
 
     cache.last_alerts = new_state
 
-
 # ======================================================
-# 🔹 Ручні запити — окремо від МРЧ
+# 🔹 Ручні запити (Крим, Луганська, Чернігівська, інші)
 # ======================================================
 async def region_status(keyword: str) -> bool:
     """Повертає True, якщо знайдено тривогу для вказаного регіону."""
@@ -192,14 +191,59 @@ async def chernihiv_alerts(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await send_photo_safe(context.application.bot, chat_id, "images/Saefty.jpg")
 
 
+async def kyiv_alerts(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    active = await region_status("київ")
+    chat_id = update.effective_chat.id
+    if active:
+        await update.message.reply_text("🚨 У Києві триває тривога!")
+        await send_photo_safe(context.application.bot, chat_id, "images/Alarm.jpg")
+    else:
+        await update.message.reply_text("✅ У Києві зараз все чисто.")
+        await send_photo_safe(context.application.bot, chat_id, "images/Saefty.jpg")
+
+
+async def oblast_alerts(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    active = await region_status("київська")
+    chat_id = update.effective_chat.id
+    if active:
+        await update.message.reply_text("🚨 У Київській області триває тривога!")
+        await send_photo_safe(context.application.bot, chat_id, "images/Alarm.jpg")
+    else:
+        await update.message.reply_text("✅ У Київській області зараз все чисто.")
+        await send_photo_safe(context.application.bot, chat_id, "images/Saefty.jpg")
+
+
+async def odesa_alerts(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    active = await region_status("одес")
+    chat_id = update.effective_chat.id
+    if active:
+        await update.message.reply_text("🚨 У Одеській області триває тривога!")
+        await send_photo_safe(context.application.bot, chat_id, "images/Alarm.jpg")
+    else:
+        await update.message.reply_text("✅ У Одеській області зараз все чисто.")
+        await send_photo_safe(context.application.bot, chat_id, "images/Saefty.jpg")
+
+
+async def frankivsk_alerts(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    active = await region_status("франк")
+    chat_id = update.effective_chat.id
+    if active:
+        await update.message.reply_text("🚨 У Івано-Франківській області триває тривога!")
+        await send_photo_safe(context.application.bot, chat_id, "images/Alarm.jpg")
+    else:
+        await update.message.reply_text("✅ У Івано-Франківській області зараз все чисто.")
+        await send_photo_safe(context.application.bot, chat_id, "images/Saefty.jpg")
+
 # ======================================================
 # 🔹 Команди користувача
 # ======================================================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.application.bot_data["chat_id"] = update.effective_chat.id
     await update.message.reply_text(
-        f"Привіт 🌸\nЯ сповіщаю про тривоги в Київській області.\n"
-        f"Напиши «що по Криму» або «що по Луганській» для ручних перевірок."
+        "Привіт 🌸\n"
+        "Я сповіщаю про тривоги в Київській області.\n"
+        "Можеш запитати, наприклад:\n"
+        "• Як там Крим?\n• Що по Луганській?\n• Що по області?\n• Що по Києву?"
     )
 
 
@@ -226,7 +270,6 @@ async def error_handler(update, context):
     if update and hasattr(update, "message") and update.message:
         await update.message.reply_text("⚠️ Виникла помилка, спробуй пізніше.")
 
-
 # ======================================================
 # 🔹 Основний цикл
 # ======================================================
@@ -244,21 +287,26 @@ async def main():
     # Команди
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("stopbot", stopbot))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex("(?i)що по крим"), krym_alerts))
+
+    # Текстові запити
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex("(?i)що по області"), oblast_alerts))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex("(?i)що по києву"), kyiv_alerts))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex("(?i)як там крим"), krym_alerts))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex("(?i)що по луган"), lugansk_alerts))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex("(?i)що по черніг"), chernihiv_alerts))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex("(?i)що по одес"), odesa_alerts))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex("(?i)що по франик"), frankivsk_alerts))
 
     app.add_error_handler(error_handler)
 
-    # МРЧ-планувальник
+    # МРЧ — фоновий моніторинг Київщини
     async def _poll(context: ContextTypes.DEFAULT_TYPE):
         await process_alerts(context.application, cache)
 
     app.job_queue.run_repeating(_poll, interval=POLL_INTERVAL, first=0)
 
-    logging.info("✅ Бот запущено та готовий до роботи.")
+    logging.info("✅ Бот запущено й готовий до роботи.")
     await app.run_polling(close_loop=False)
-
 
 # ======================================================
 # 🔹 Запуск
