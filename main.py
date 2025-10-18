@@ -7,6 +7,9 @@ import nest_asyncio
 import logging
 from typing import Dict, Optional
 
+import time
+from datetime import datetime
+
 import aiohttp
 from dotenv import load_dotenv
 from telegram import Update
@@ -21,7 +24,7 @@ from telegram.ext import (
 # ===== Load .env (якщо використовується) =====
 load_dotenv()
 
-# ===== Фейковий HTTP сервер для Render =====
+# ===== Фейковий HTTP сервер (можна лишити на будь-якому хостингу) =====
 class StubHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -64,18 +67,25 @@ ALERT_TYPES_UA = {
     "other": "Інша тривога",
 }
 
+# ===== Хелпер нормалізації назв =====
+def _norm(s: str) -> str:
+    if not s:
+        return ""
+    s = s.lower()
+    for bad in ["м.", "обл.", "область", ",", "’", "'", "‐", "-", "–", "—"]:
+        s = s.replace(bad, " ")
+    return " ".join(s.split())
+
 
 @dataclass
 class RegionAlertCache:
     """Зберігає останній стан тривог по районах."""
-
     last_alerts: Dict[str, str] = field(default_factory=dict)
     initialized: bool = False
 
 
 def get_chat_id(app) -> Optional[int]:
     """Повертає актуальний chat_id з bot_data, якщо він відомий."""
-
     chat_id = app.bot_data.get("chat_id")
     if chat_id is not None:
         return int(chat_id)
@@ -85,10 +95,8 @@ def get_chat_id(app) -> Optional[int]:
 
 async def send_photo_safe(bot, chat_id: Optional[int], image_path: str) -> bool:
     """Надсилає зображення, якщо файл існує. Повертає True при успіху."""
-
     if not chat_id:
         return False
-
     try:
         with open(image_path, "rb") as photo:
             await bot.send_photo(chat_id=chat_id, photo=photo)
@@ -105,16 +113,42 @@ async def fetch_alerts(location_name, city_type="oblast"):
     headers = {"Authorization": f"Bearer {ALERTS_TOKEN}"}
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.get(API_URL, headers=headers, timeout=10) as resp:
-                data = await resp.json()
+            # anti-cache параметр, щоб не ловити застарілу відповідь
+            async with session.get(
+                API_URL,
+                headers=headers,
+                timeout=10,
+                params={"_": int(time.time())},
+            ) as resp:
+                status = resp.status
+                try:
+                    data = await resp.json()
+                except Exception:
+                    txt = await resp.text()
+                    logging.error(f"API не повернуло JSON (status={status}): {txt[:300]}")
+                    return []
+        alerts = data.get("alerts", [])
+        logging.info(f"API повернуло {len(alerts)} запис(ів). Приклад oblast: {alerts[0].get('location_oblast') if alerts else '—'}")
+
+        loc_norm = _norm(location_name)
+
         if city_type == "oblast":
-            return [a for a in data.get("alerts", []) if a.get("location_oblast") == location_name]
+            filtered = []
+            for a in alerts:
+                ob = _norm(a.get("location_oblast"))
+                # допускаємо різні варіанти написання
+                if loc_norm and (loc_norm in ob or ob in loc_norm):
+                    filtered.append(a)
+            return filtered
         else:
-            return [
-                a
-                for a in data.get("alerts", [])
-                if a.get("location_title") == location_name or a.get("location_oblast") == location_name
-            ]
+            filtered = []
+            for a in alerts:
+                t = _norm(a.get("location_title"))
+                ob = _norm(a.get("location_oblast"))
+                if loc_norm and (loc_norm in t or t in loc_norm or loc_norm in ob or ob in loc_norm):
+                    filtered.append(a)
+            return filtered
+
     except Exception as e:
         logging.error(f"Помилка при запиті до API: {e}")
         return []
@@ -132,12 +166,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def oblast_alerts(update: Update, context: ContextTypes.DEFAULT_TYPE):
     alerts = await fetch_alerts(REGION)
     if not alerts:
-        await update.message.reply_text(f"✅ {REGION} - зараз все чисто!")
-        try:
-            with open("images/Saefty.jpg", "rb") as photo:
-                await update.message.reply_photo(photo=photo)
-        except Exception as e:
-            logging.error(f"Помилка при відправці картинки: {e}")
+        await update.message.reply_text(f"✅ {REGION} — зараз все чисто!")
+        await send_photo_safe(context.application.bot, update.effective_chat.id, "images/Saefty.jpg")
         return
 
     text = f"🚨 *Активні тривоги у {REGION}:*\n"
@@ -153,11 +183,7 @@ async def city_alerts(update: Update, context: ContextTypes.DEFAULT_TYPE, city_n
     alerts = await fetch_alerts(city_name, city_type="city")
     if not alerts:
         await update.message.reply_text(f"✅ У {city_label} зараз все чисто!")
-        try:
-            with open("images/Saefty.jpg", "rb") as photo:
-                await update.message.reply_photo(photo=photo)
-        except Exception as e:
-            logging.error(f"Помилка при відправці картинки: {e}")
+        await send_photo_safe(context.application.bot, update.effective_chat.id, "images/Saefty.jpg")
         return
 
     text = f"🚨 У {city_label} зафіксована тривога!\n"
@@ -165,7 +191,7 @@ async def city_alerts(update: Update, context: ContextTypes.DEFAULT_TYPE, city_n
         raion = alert.get("location_title", "Невідомий район")
         alert_type = alert.get("alert_type", "невідомо")
         alert_type_ua = ALERT_TYPES_UA.get(alert_type, alert_type)
-        text += f"• {raion} — {alert_type_ua}\n"
+        text += f"• {раion} — {alert_type_ua}\n"
     await update.message.reply_text(text)
 
 
@@ -185,12 +211,30 @@ async def frankivsk_alerts(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await city_alerts(update, context, "м. Івано-Франківськ", "Івано-Франківськ")
 
 
-# ===== Фонове опитування API =====
+# ===== Діагностика =====
+async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    cache: RegionAlertCache = context.application.bot_data.get("alert_cache") or RegionAlertCache()
+    keys = ", ".join(cache.last_alerts.keys()) or "—"
+    chat_id = get_chat_id(context.application)
+    await update.message.reply_text(
+        f"ℹ️ REGION: {REGION}\n"
+        f"CHAT_ID: {chat_id or 'нема'}\n"
+        f"POLL_INTERVAL: {POLL_INTERVAL}s\n"
+        f"Поточні райони (ключі): {keys}"
+    )
+
+
+# ===== Фонове опитування API (один тік) =====
 async def process_alerts(app, cache: RegionAlertCache):
     """Завантажує актуальні тривоги та розсилає оновлення у чат."""
+    tick = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    logging.info(f"⏱ Перевірка {REGION} @ {tick}")
 
     alerts = await fetch_alerts(REGION)
     new_state = {a.get("location_title"): a.get("alert_type") for a in alerts}
+
+    logging.info(f"Ключі new_state: {list(new_state.keys())}")
+    logging.info(f"Ключі last_alerts: {list(cache.last_alerts.keys())}")
 
     # Перший запуск: просто запам'ятовуємо поточний стан, щоб не дублювати "старі" тривоги
     if not cache.initialized:
@@ -201,11 +245,10 @@ async def process_alerts(app, cache: RegionAlertCache):
 
     chat_id = get_chat_id(app)
 
-    # Нові тривоги по районах
+    # Нові/змінені тривоги по районах
     for raion, alert_type in new_state.items():
         if cache.last_alerts.get(raion) == alert_type:
             continue
-
         try:
             if chat_id:
                 await send_photo_safe(app.bot, chat_id, "images/Alarm.jpg")
@@ -222,10 +265,9 @@ async def process_alerts(app, cache: RegionAlertCache):
             logging.error(f"Помилка при відправці тривоги: {e}")
 
     # Відбої по районах
-    for raion, old_type in cache.last_alerts.items():
+    for raion, _old_type in cache.last_alerts.items():
         if raion in new_state:
             continue
-
         try:
             if chat_id:
                 await app.bot.send_message(
@@ -260,20 +302,18 @@ async def stopbot(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     await update.message.reply_text("🛑 Отримано команду зупинки. Виконую вимкнення...")
-    # Запускаємо shutdown як окрему задачу, щоб не блокувати хендлер
     asyncio.create_task(_shutdown_sequence(context.application))
 
 
 async def _shutdown_sequence(app):
     logging.info("🔻 Shutdown requested by admin")
-
-    # 1) зупиняємо job_queue, щоб не залишити повторювані задачі
+    # 1) зупиняємо job_queue
     try:
         app.job_queue.stop()
     except Exception as e:
         logging.debug(f"Проблема під час job_queue.stop(): {e}")
 
-    # 2) зупиняємо та шутдаун додатку (аккуратно)
+    # 2) коректно зупиняємо додаток
     try:
         await app.shutdown()
     except Exception as e:
@@ -284,7 +324,6 @@ async def _shutdown_sequence(app):
         logging.debug(f"Проблема під час app.stop(): {e}")
 
     logging.info("⚙️ Бот вимкнено адміністратором. Зупиняю event loop.")
-    # 3) зупиняємо event loop (це припинить run_forever у __main__)
     loop = asyncio.get_event_loop()
     loop.stop()
 
@@ -310,6 +349,7 @@ async def main():
 
     # ===== Хендлери команд і тексту =====
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("status", status))
     app.add_handler(CommandHandler("stopbot", stopbot))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex("(?i)що по області"), oblast_alerts))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex("(?i)як там крим"), krym_alerts))
@@ -319,7 +359,7 @@ async def main():
 
     app.add_error_handler(error_handler)
 
-    # ===== Фонові задачі =====
+    # ===== Фонові задачі через JobQueue =====
     async def _job_callback(context: ContextTypes.DEFAULT_TYPE):
         cache: RegionAlertCache = context.application.bot_data.setdefault("alert_cache", RegionAlertCache())
         await process_alerts(context.application, cache)
@@ -327,13 +367,11 @@ async def main():
     app.job_queue.run_repeating(_job_callback, interval=POLL_INTERVAL, first=0)
 
     logging.info("✅ Бот запущено...")
-    # Запуск polling без автоматичного закриття loop (close_loop=False)
     await app.run_polling(close_loop=False)
 
 
 # ===== Запуск =====
 if __name__ == "__main__":
-    # Використовуємо поточний event loop: запускаємо main як таску і тримаємо loop.run_forever()
     loop = asyncio.get_event_loop()
     try:
         loop.create_task(main())
@@ -341,7 +379,6 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         logging.info("🛑 Зупинка вручну (KeyboardInterrupt)")
     finally:
-        # Далі коректно завершуємо всі таски
         tasks = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
         for task in tasks:
             task.cancel()
