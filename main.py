@@ -24,7 +24,7 @@ from telegram.ext import (
 # ===== Load .env (якщо використовується) =====
 load_dotenv()
 
-# ===== Фейковий HTTP сервер (можна лишити на будь-якому хостингу) =====
+# ===== Легкий HTTP-сервер (healthcheck/ping) =====
 class StubHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -41,8 +41,8 @@ Thread(target=run_http_server, daemon=True).start()
 # ===== Логування =====
 logging.basicConfig(level=logging.INFO)
 
-# ===== Змінні оточення =====
-TELEGRAM_TOKEN = os.getenv("BOT_TOKEN")
+# ===== Змінні оточення (узгоджені назви) =====
+BOT_TOKEN = os.getenv("BOT_TOKEN")
 ALERTS_TOKEN = os.getenv("ALERTS_TOKEN")
 REGION = os.getenv("REGION", "Київська область")
 POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", 25))
@@ -54,12 +54,12 @@ DEFAULT_CHAT_ID = int(CHAT_ID_ENV) if CHAT_ID_ENV else None
 # Адмін для аварійної зупинки
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 
-if not TELEGRAM_TOKEN or not ALERTS_TOKEN:
+if not BOT_TOKEN or not ALERTS_TOKEN:
     raise RuntimeError("Не задано одну або кілька обов'язкових змінних оточення: BOT_TOKEN, ALERTS_TOKEN")
 
 API_URL = "https://api.alerts.in.ua/v1/alerts/active.json"
 
-# ===== Словник типів тривог (українські назви) =====
+# ===== Мапа типів тривог (українські назви) =====
 ALERT_TYPES_UA = {
     "air_raid": "Повітряна тривога!",
     "chemical": "Хімічна тривога",
@@ -108,7 +108,7 @@ async def send_photo_safe(bot, chat_id: Optional[int], image_path: str) -> bool:
     return False
 
 
-# ===== Допоміжні функції =====
+# ===== Запит до API з анти-кешем та м'яким фільтром =====
 async def fetch_alerts(location_name, city_type="oblast"):
     headers = {"Authorization": f"Bearer {ALERTS_TOKEN}"}
     try:
@@ -128,7 +128,10 @@ async def fetch_alerts(location_name, city_type="oblast"):
                     logging.error(f"API не повернуло JSON (status={status}): {txt[:300]}")
                     return []
         alerts = data.get("alerts", [])
-        logging.info(f"API повернуло {len(alerts)} запис(ів). Приклад oblast: {alerts[0].get('location_oblast') if alerts else '—'}")
+        logging.info(
+            f"API повернуло {len(alerts)} запис(ів). "
+            f"Приклад oblast: {alerts[0].get('location_oblast') if alerts else '—'}"
+        )
 
         loc_norm = _norm(location_name)
 
@@ -136,7 +139,7 @@ async def fetch_alerts(location_name, city_type="oblast"):
             filtered = []
             for a in alerts:
                 ob = _norm(a.get("location_oblast"))
-                # допускаємо різні варіанти написання
+                # допускаємо різні варіанти написання/мови
                 if loc_norm and (loc_norm in ob or ob in loc_norm):
                     filtered.append(a)
             return filtered
@@ -191,7 +194,7 @@ async def city_alerts(update: Update, context: ContextTypes.DEFAULT_TYPE, city_n
         raion = alert.get("location_title", "Невідомий район")
         alert_type = alert.get("alert_type", "невідомо")
         alert_type_ua = ALERT_TYPES_UA.get(alert_type, alert_type)
-        text += f"• {раion} — {alert_type_ua}\n"
+        text += f"• {raion} — {alert_type_ua}\n"
     await update.message.reply_text(text)
 
 
@@ -224,7 +227,7 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-# ===== Фонове опитування API (один тік) =====
+# ===== Один «тік» опитування API =====
 async def process_alerts(app, cache: RegionAlertCache):
     """Завантажує актуальні тривоги та розсилає оновлення у чат."""
     tick = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -338,7 +341,7 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
 # ===== Основний цикл =====
 async def main():
     nest_asyncio.apply()
-    app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     if DEFAULT_CHAT_ID is not None:
         app.bot_data["chat_id"] = DEFAULT_CHAT_ID
