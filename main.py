@@ -349,6 +349,8 @@ async def main():
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex("(?i)що по луган"), lugansk_alerts))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex("(?i)що по черніг"), chernihiv_alerts))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex("(?i)^що по "), handle_dynamic_query))
+    app.add_handler(CommandHandler("list_regions", list_regions))
+
 
     app.add_error_handler(error_handler)
 
