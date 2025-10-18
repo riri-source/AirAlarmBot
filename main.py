@@ -210,6 +210,14 @@ async def chernihiv_alerts(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("✅ У Чернігівській області зараз все чисто.")
 
+async def frankivsk_alerts(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    active = await region_status("франк")
+    chat_id = update.effective_chat.id
+    if active:
+        await update.message.reply_text("🚨 В Івано-Франківській області триває тривога!")
+    else:
+        await update.message.reply_text("✅ В Івано-Франківській області зараз все чисто.")
+
 # ======================================================
 # 🔹 Хендлер словникових запитів
 # ======================================================
@@ -303,6 +311,7 @@ async def main():
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex("(?i)що по києву"), kyiv_alerts))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex("(?i)як там крим"), krym_alerts))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex("(?i)що по одес"), odesa_alerts))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex("(?i)що по франику|що по івано-франківську|що по франківську"), frankivsk_alerts))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex("(?i)що по луган"), lugansk_alerts))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex("(?i)що по черніг"), chernihiv_alerts))
 
