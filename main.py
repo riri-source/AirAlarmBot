@@ -54,7 +54,7 @@ def run_http_server():
 Thread(target=run_http_server, daemon=True).start()
 
 # ======================================================
-# helpers
+# helpers & data
 # ======================================================
 @dataclass
 class RegionAlertCache:
@@ -89,7 +89,6 @@ def _dict_path() -> str:
 def load_locations_dict() -> Dict:
     path = _dict_path()
     if not os.path.exists(path):
-        logging.warning("⚠️ Створюю новий словник.")
         with open(path, "w", encoding="utf-8") as f:
             json.dump({}, f, ensure_ascii=False, indent=2)
     with open(path, "r", encoding="utf-8") as f:
@@ -126,7 +125,6 @@ async def process_alerts(app, cache: RegionAlertCache):
     data = await _get_api_data()
     alerts = data.get("alerts", [])
     chat_id = get_chat_id(app)
-    now = datetime.now().strftime("%H:%M:%S")
 
     relevant_kyiv = [a for a in alerts if a.get("location_oblast") in {"Київська область", "м. Київ"}]
     new_state_kyiv = {a["location_title"]: a["alert_type"] for a in relevant_kyiv}
@@ -142,7 +140,11 @@ async def process_alerts(app, cache: RegionAlertCache):
     for r, t in new_state_kyiv.items():
         if cache.last_alerts.get(r) != t and chat_id:
             await send_photo_safe(app.bot, chat_id, "images/Alarm.jpg")
-            await app.bot.send_message(chat_id=chat_id, text=f"🚨 *{r}* — *{ALERT_TYPES_UA.get(t, t)}*", parse_mode="Markdown")
+            await app.bot.send_message(
+                chat_id=chat_id,
+                text=f"🚨 *{r}* — *{ALERT_TYPES_UA.get(t, t)}*",
+                parse_mode="Markdown",
+            )
     for r in list(cache.last_alerts.keys()):
         if r not in new_state_kyiv and chat_id:
             await app.bot.send_message(chat_id=chat_id, text=f"✅ Відбій тривоги у *{r}*", parse_mode="Markdown")
@@ -150,7 +152,7 @@ async def process_alerts(app, cache: RegionAlertCache):
         await app.bot.send_message(chat_id=chat_id, text=f"✅ Відбій тривоги у {REGION}")
         await send_photo_safe(app.bot, chat_id, "images/Clear.jpg")
 
-    # Україна → тобі
+    # Україна → адміну
     last_global = app.bot_data.get("last_global_alerts", {})
     for key, t in new_state_global.items():
         if last_global.get(key) != t:
@@ -182,25 +184,32 @@ async def handle_dynamic_query(update: Update, context: ContextTypes.DEFAULT_TYP
     kw = norm(kw_raw)
     locations = context.application.bot_data.get("locations_dict", {})
     found_oblast, found_region = None, None
+
+    # точний
     for oblast, mapping in locations.items():
         for k, region in mapping.items():
             if kw == norm(k):
                 found_oblast, found_region = oblast, region
                 break
         if found_oblast: break
+    # частковий
     if not found_oblast:
         for oblast, mapping in locations.items():
             for k, region in mapping.items():
-                if kw in norm(k) or norm(k) in kw:
+                nk = norm(k)
+                if kw in nk or nk in kw:
                     found_oblast, found_region = oblast, region
                     break
             if found_oblast: break
+
     if not found_oblast:
         context.user_data["pending_add"] = kw_raw
         await update.message.reply_text("🤔 Не знаю такого населеного пункту. Надіслати адміну для розгляду? (так/ні)")
         return
+
     cache: RegionAlertCache = context.application.bot_data.get("alert_cache", RegionAlertCache())
     active = cache.last_alerts or {}
+
     if found_oblast in {"Київська область", "м. Київ"}:
         is_active = found_region in active
         msg = f"🚨 В області *{found_oblast}* ({found_region}) триває тривога!" if is_active else f"✅ В області *{found_oblast}* ({found_region}) все тихо!"
@@ -210,7 +219,7 @@ async def handle_dynamic_query(update: Update, context: ContextTypes.DEFAULT_TYP
     await update.message.reply_text(msg, parse_mode="Markdown")
 
 # ======================================================
-# admin approval flow
+# admin add flow
 # ======================================================
 async def handle_user_yes_no(update: Update, context: ContextTypes.DEFAULT_TYPE):
     txt = (update.message.text or "").strip().lower()
@@ -222,67 +231,77 @@ async def handle_user_yes_no(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return
     kw = context.user_data.pop("pending_add")
     await context.bot.send_message(chat_id=ADMIN_ID, text=f"📩 Новий запит на додавання НП: «{kw}»")
-    context.application.bot_data["pending_kw"] = kw
-    oblasts = list(context.application.bot_data["locations_dict"].keys())
-    msg = "📍 Вкажи номер області для «{}»:\n\n".format(kw)
+    app_data = context.application.bot_data
+    app_data["pending_kw"] = kw
+    app_data["awaiting_oblast_choice"] = True
+
+    # показати нумерований список областей
+    locs = app_data.get("locations_dict", {})
+    oblasts = list(locs.keys())
+    msg = f"📍 Вкажи номер області для «{kw}»:\n\n"
     for i, o in enumerate(oblasts, 1):
         msg += f"{i}. {o}\n"
     await context.bot.send_message(chat_id=ADMIN_ID, text=msg)
-    context.application.bot_data["awaiting_oblast_choice"] = True
 
-async def handle_admin_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def handle_admin_number_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Єдиний числовий хендлер: спочатку перевіряє, чого чекаємо (район чи область)."""
     if update.effective_user.id != ADMIN_ID:
-        return
-    data = context.application.bot_data
-    if not data.get("awaiting_oblast_choice"):
         return
     txt = (update.message.text or "").strip()
     if not txt.isdigit():
         return
     idx = int(txt) - 1
-    oblasts = list(data["locations_dict"].keys())
-    if idx < 0 or idx >= len(oblasts):
-        await update.message.reply_text("❌ Недійсний номер.")
-        return
-    chosen = oblasts[idx]
-    kw = data.pop("pending_kw", None)
-    data.pop("awaiting_oblast_choice", None)
-    if chosen == "Київська область":
-        msg = "🏙 Обрано Київщину. Вибери район:\n\n"
-        for i, r in enumerate(KYIV_REGIONS, 1):
-            msg += f"{i}. {r}\n"
-        await update.message.reply_text(msg)
-        data["awaiting_kyiv_region_choice"] = True
-        data["pending_region_add"] = kw
-        return
-    # додаємо до області
-    loc = data["locations_dict"]
-    loc.setdefault(chosen, {})[kw.lower()] = chosen
-    save_locations_dict(loc)
-    await update.message.reply_text(f"✅ Додано «{kw}» до області {chosen}.")
-    data["locations_dict"] = loc
+    app_data = context.application.bot_data
 
-async def handle_admin_kyiv_region_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
+    # КРОК 2: очікуємо вибір району Київщини
+    if app_data.get("awaiting_kyiv_region_choice"):
+        if idx < 0 or idx >= len(KYIV_REGIONS):
+            await update.message.reply_text("❌ Недійсний номер району.")
+            return
+        region = KYIV_REGIONS[idx]
+        kw = app_data.pop("pending_region_add", None)
+        if not kw:
+            await update.message.reply_text("⚠️ Немає збереженого ключового слова. Спробуй додати ще раз.")
+            app_data.pop("awaiting_kyiv_region_choice", None)
+            return
+        # зберігаємо
+        loc = app_data.get("locations_dict", {})
+        loc.setdefault("Київська область", {})[kw.lower()] = region
+        save_locations_dict(loc)
+        # перечитати з диску і оновити кеш
+        app_data["locations_dict"] = load_locations_dict()
+        app_data.pop("awaiting_kyiv_region_choice", None)
+        await update.message.reply_text(f"✅ Додано «{kw}» до {region} Київської області.")
         return
-    data = context.application.bot_data
-    if not data.get("awaiting_kyiv_region_choice"):
+
+    # КРОК 1: очікуємо вибір області
+    if app_data.get("awaiting_oblast_choice"):
+        locs = app_data.get("locations_dict", {})
+        oblasts = list(locs.keys())
+        if idx < 0 or idx >= len(oblasts):
+            await update.message.reply_text("❌ Недійсний номер області.")
+            return
+        chosen = oblasts[idx]
+        kw = app_data.pop("pending_kw", None)
+        app_data.pop("awaiting_oblast_choice", None)
+        if not kw:
+            await update.message.reply_text("⚠️ Немає збереженого ключового слова. Спробуй додати ще раз.")
+            return
+        if chosen == "Київська область":
+            # показати райони
+            msg = "🏙 Обрано Київщину. Вибери район:\n\n"
+            for i, r in enumerate(KYIV_REGIONS, 1):
+                msg += f"{i}. {r}\n"
+            await update.message.reply_text(msg)
+            app_data["awaiting_kyiv_region_choice"] = True
+            app_data["pending_region_add"] = kw
+            return
+        # інша область — одразу додаємо ключ у групу області (значенням є назва області)
+        locs.setdefault(chosen, {})[kw.lower()] = chosen
+        save_locations_dict(locs)
+        app_data["locations_dict"] = load_locations_dict()
+        await update.message.reply_text(f"✅ Додано «{kw}» до області {chosen}.")
         return
-    txt = (update.message.text or "").strip()
-    if not txt.isdigit():
-        return
-    idx = int(txt) - 1
-    if idx < 0 or idx >= len(KYIV_REGIONS):
-        await update.message.reply_text("❌ Недійсний номер району.")
-        return
-    region = KYIV_REGIONS[idx]
-    kw = data.pop("pending_region_add", None)
-    loc = data["locations_dict"]
-    loc.setdefault("Київська область", {})[kw.lower()] = region
-    save_locations_dict(loc)
-    await update.message.reply_text(f"✅ Додано «{kw}» до {region} Київської області.")
-    data.pop("awaiting_kyiv_region_choice", None)
-    data["locations_dict"] = loc
 
 # ======================================================
 # export dict
@@ -295,13 +314,14 @@ async def export_dict(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"<pre>{json.dumps(data, ensure_ascii=False, indent=2)}</pre>", parse_mode="HTML")
 
 # ======================================================
-# commands
+# base commands
 # ======================================================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.application.bot_data["chat_id"] = update.effective_chat.id
-    await update.message.reply_text("Привіт 🌸\n"
-        "Я повідомляю про тривоги у Київській області та по Україні.\n"
-        "Можеш спробувати: «що по бучі?» або «що по житомиру?»")
+    await update.message.reply_text(
+        "Привіт 🌸\nЯ повідомляю про тривоги у Київській області та по Україні.\n"
+        "Можеш спробувати: «що по бучі?» або «що по житомиру?»"
+    )
 
 # ======================================================
 # main
@@ -312,16 +332,19 @@ async def main():
     if DEFAULT_CHAT_ID:
         app.bot_data["chat_id"] = DEFAULT_CHAT_ID
         app.bot_data["default_chat_id"] = DEFAULT_CHAT_ID
+
     cache = RegionAlertCache()
     app.bot_data["alert_cache"] = cache
     app.bot_data["locations_dict"] = load_locations_dict()
 
+    # handlers
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("export_dict", export_dict))
+
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex("(?i)^що по "), handle_dynamic_query))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex("(?i)^(так|ні)$"), handle_user_yes_no))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex("^[0-9]+$"), handle_admin_choice))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex("^[0-9]+$"), handle_admin_kyiv_region_choice))
+    # один універсальний числовий хендлер
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex("^[0-9]+$"), handle_admin_number_choice))
 
     async def _poll(context: ContextTypes.DEFAULT_TYPE):
         await process_alerts(context.application, cache)
