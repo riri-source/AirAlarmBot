@@ -72,12 +72,6 @@ KYIV_REGIONS = [
 # ======================================================
 # 🔹 Хелпери
 # ======================================================
-def norm(s: str) -> str:
-    if not s: return ""
-    s = s.lower().strip()
-    for bad in ["’","'","–","—","‐","-",".",","]: s = s.replace(bad, " ")
-    return " ".join(s.split())
-
 def _dict_path() -> str:
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), "locations_dict.json")
 
@@ -106,7 +100,7 @@ async def send_photo_safe(bot, chat_id: Optional[int], image_path: str):
         pass
 
 # ======================================================
-# 🔹 Моніторинг
+# 🔹 Моніторинг тривог
 # ======================================================
 async def process_alerts(app, cache: RegionAlertCache):
     data = await _get_api_data()
@@ -149,61 +143,48 @@ async def process_alerts(app, cache: RegionAlertCache):
     app.bot_data["last_global_alerts"] = new_state_global
 
 # ======================================================
-# 🔹 Регіональні запити
+# 🔹 Команди /start, /help, /listregions, /exportdict
 # ======================================================
-async def region_status_contains(keyword: str) -> bool:
+async def start(update, ctx):
+    ctx.application.bot_data["chat_id"] = update.effective_chat.id
+    await update.message.reply_text("Привіт 🌸 KytsjaAlarm запущено.\nОтримую поточні тривоги...")
+
     data = await _get_api_data()
-    kw = keyword.lower()
-    for a in data.get("alerts", []):
-        if a.get("finished_at") is None:
-            if kw in (a.get("location_oblast") or "").lower() or kw in (a.get("location_title") or "").lower():
-                return True
-    return False
-
-async def _region_reply(update, kw, label):
-    if await region_status_contains(kw):
-        await update.message.reply_text(f"🚨 {label} триває тривога!")
+    alerts = data.get("alerts", [])
+    if not alerts:
+        msg = "✅ Зараз по всій Україні спокійно."
     else:
-        await update.message.reply_text(f"✅ {label} зараз все чисто.")
+        lines = [
+            f"🚨 {a['location_oblast']} — {a['location_title']}: "
+            f"{ALERT_TYPES_UA.get(a['alert_type'], '')}"
+            for a in alerts
+        ]
+        msg = "🗺 <b>Актуальні тривоги:</b>\n" + "\n".join(lines)
 
-async def krym_alerts(u,c):       await _region_reply(u, "крим", "У Криму")
-async def odesa_alerts(u,c):      await _region_reply(u, "одес", "В Одеській області")
-async def oblast_alerts(u,c):     await _region_reply(u, "київська", "У Київській області")
-async def kyiv_alerts(u,c):       await _region_reply(u, "київ", "У Києві")
-async def lugansk_alerts(u,c):    await _region_reply(u, "луган", "У Луганській області")
-async def chernihiv_alerts(u,c):  await _region_reply(u, "черніг", "У Чернігівській області")
-async def frankivsk_alerts(u,c):  await _region_reply(u, "франк", "В Івано-Франківській області")
+    await ctx.bot.send_message(chat_id=ADMIN_ID, text=msg, parse_mode="HTML")
 
-# ======================================================
-# 🔹 /help команда
-# ======================================================
+    if update.effective_chat.type in ("group", "supergroup"):
+        await update.message.reply_text("✅ Бот активний. Моніторю Київську область.")
+
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     help_text = (
-        "🧭 *Команди KytsjaAlarm Bot*\n\n"
-        "📍 *Основні:*\n"
-        "/start — запустити бота або перевірити стан\n"
-        "/help — показати цей список команд\n"
-        "/stopbot — зупинити бота (адміністратор)\n\n"
-        "📡 *Моніторинг і запити:*\n"
-        "/list_regions — показати області, які бачить API\n"
-        "/export_dict — показати поточний словник назв (адміністратор)\n\n"
-        "🗺 *Текстові запити:*\n"
+        "🧭 <b>Команди KytsjaAlarm Bot</b>\n\n"
+        "📍 <b>Основні:</b>\n"
+        "<code>/start</code> — запустити бота або перевірити стан\n"
+        "<code>/help</code> — показати цей список команд\n"
+        "<code>/stopbot</code> — зупинити бота (адміністратор)\n\n"
+        "📡 <b>Моніторинг і запити:</b>\n"
+        "<code>/listregions</code> — показати області, які бачить API\n"
+        "<code>/exportdict</code> — показати поточний словник назв (адміністратор)\n\n"
+        "🗺 <b>Текстові запити:</b>\n"
         "«що по області» — Київська область\n"
         "«що по Києву» — м. Київ\n"
         "«як там Крим?» — Крим\n"
         "«що по Франику» — Івано-Франківська область\n"
-        "«що по <назві>» — будь-який населений пункт зі словника\n\n"
+        "«що по &lt;назві&gt;» — будь-який населений пункт зі словника\n\n"
         "📩 Якщо боту невідомий пункт — він запитає, чи надіслати адміну для додавання."
     )
-    await update.message.reply_text(help_text, parse_mode="Markdown")
-
-# ======================================================
-# 🔹 Решта команд
-# ======================================================
-async def export_dict(update, ctx):
-    if update.effective_user.id != ADMIN_ID: return
-    data = ctx.application.bot_data.get("locations_dict", {})
-    await update.message.reply_text(f"<pre>{json.dumps(data, ensure_ascii=False, indent=2)}</pre>", parse_mode="HTML")
+    await update.message.reply_text(help_text, parse_mode="HTML")
 
 async def list_regions(update, ctx):
     await update.message.reply_text("⏳ Отримую список областей...")
@@ -212,17 +193,14 @@ async def list_regions(update, ctx):
     txt = "🧭 Список областей, які бачить API:\n\n" + "\n".join(f"• {r}" for r in regs) if regs else "❌ API не повернуло даних."
     await update.message.reply_text(txt)
 
-async def start(update, ctx):
-    ctx.application.bot_data["chat_id"] = update.effective_chat.id
-    await update.message.reply_text("Привіт 🌸 Бот працює. Отримую поточні тривоги...")
-    data = await _get_api_data()
-    alerts = data.get("alerts", [])
-    if not alerts:
-        await ctx.bot.send_message(chat_id=ADMIN_ID, text="✅ В Україні все спокійно.")
-    else:
-        lines = [f"🚨 {a['location_oblast']} — {a['location_title']}: {ALERT_TYPES_UA.get(a['alert_type'],'')}" for a in alerts]
-        await ctx.bot.send_message(chat_id=ADMIN_ID, text="🗺 Актуальні тривоги:\n" + "\n".join(lines))
+async def export_dict(update, ctx):
+    if update.effective_user.id != ADMIN_ID: return
+    data = ctx.application.bot_data.get("locations_dict", {})
+    await update.message.reply_text(f"<pre>{json.dumps(data, ensure_ascii=False, indent=2)}</pre>", parse_mode="HTML")
 
+# ======================================================
+# 🔹 Інше
+# ======================================================
 async def stopbot(update, ctx):
     if update.effective_user.id != ADMIN_ID:
         await update.message.reply_text("⛔️ Лише адміністратор.")
@@ -254,22 +232,11 @@ async def main():
     app.bot_data["alert_cache"] = cache
     app.bot_data["locations_dict"] = load_locations_dict()
 
-    # Команди
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("stopbot", stopbot))
-    app.add_handler(CommandHandler("list_regions", list_regions))
-    app.add_handler(CommandHandler("export_dict", export_dict))
-
-    # Регіональні запити
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex("(?i)що по області"), oblast_alerts))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex("(?i)що по києву"), kyiv_alerts))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex("(?i)як там крим"), krym_alerts))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex("(?i)що по одес"), odesa_alerts))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex("(?i)що по луган"), lugansk_alerts))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex("(?i)що по черніг"), chernihiv_alerts))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex("(?i)що по франик|що по івано-франківськ"), frankivsk_alerts))
-
+    app.add_handler(CommandHandler("listregions", list_regions))
+    app.add_handler(CommandHandler("exportdict", export_dict))
     app.add_error_handler(error_handler)
 
     async def _poll(ctx: ContextTypes.DEFAULT_TYPE):
