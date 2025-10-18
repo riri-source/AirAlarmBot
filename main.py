@@ -201,21 +201,29 @@ async def export_dict(update, ctx):
 # ======================================================
 # 🔹 Інше
 # ======================================================
-async def stopbot(update, ctx):
+async def stopbot(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         await update.message.reply_text("⛔️ Лише адміністратор.")
         return
+
     await update.message.reply_text("🛑 Зупиняю роботу...")
+
     try:
-        ctx.application.job_queue.stop()
+        # зупиняємо JobQueue коректно
+        await ctx.application.job_queue.stop()
+
+        # завершуємо опитування
+        await ctx.application.stop_running()
         await ctx.application.shutdown()
         await ctx.application.stop()
-        asyncio.get_event_loop().stop()
+
+        await update.message.reply_text("✅ KytsjaAlarm повністю зупинено.")
+        logging.info("🛑 Бот зупинено адміністратором.")
+        os._exit(0)  # завершення процесу (щоб Render або systemd бачили як exit)
     except Exception as e:
         logging.error(f"Помилка при зупинці: {e}")
+        await update.message.reply_text(f"⚠️ Не вдалося завершити повністю: {e}")
 
-async def error_handler(update, ctx):
-    logging.error("Помилка:", exc_info=ctx.error)
 
 # ======================================================
 # 🔹 Основний цикл
