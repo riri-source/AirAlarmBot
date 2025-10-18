@@ -109,6 +109,17 @@ async def send_all_oblasts_to_admin(bot, admin_id: int):
     except Exception as e:
         await bot.send_message(chat_id=admin_id, text=f"❌ Помилка при запиті до API:\n{e}")
 
+async def list_regions(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Команда /list_regions — показує всі області, які бачить API."""
+    user_id = update.effective_user.id
+    if user_id != ADMIN_ID:
+        await update.message.reply_text("⛔️ Ця команда лише для адміністратора.")
+        return
+
+    await update.message.reply_text("⏳ Отримую список областей...")
+    await send_all_oblasts_to_admin(context.bot, ADMIN_ID)
+
+
 # ======================================================
 # 🔹 Завантаження зовнішнього словника
 # ======================================================
