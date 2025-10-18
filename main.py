@@ -93,7 +93,11 @@ async def _get_api_data():
 # ======================================================
 # 🔹 Завантаження зовнішнього словника
 # ======================================================
-def load_locations_dict(file_path: str = "locations_dict.json") -> Dict:
+def load_locations_dict(file_path: str = None) -> Dict:
+    if file_path is None:
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        file_path = os.path.join(base_dir, "locations_dict.json")
+
     if not os.path.exists(file_path):
         logging.warning("⚠️ Файл словника не знайдено, створюю порожній шаблон.")
         return {}
@@ -145,18 +149,94 @@ async def process_alerts(app, cache: RegionAlertCache):
     cache.last_alerts = new_state
 
 # ======================================================
-# 🔹 Обробка словникових запитів користувача
+# 🔹 Ручні запити по областях / містах
+# ======================================================
+async def region_status(keyword: str) -> bool:
+    data = await _get_api_data()
+    kw = keyword.lower()
+    for a in data.get("alerts", []):
+        if a.get("finished_at") is None:
+            oblast = (a.get("location_oblast") or "").lower()
+            title = (a.get("location_title") or "").lower()
+            if kw in oblast or kw in title:
+                return True
+    return False
+
+async def krym_alerts(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    active = await region_status("крим")
+    chat_id = update.effective_chat.id
+    if active:
+        await update.message.reply_text("🚨 У Криму триває тривога!")
+    else:
+        await update.message.reply_text("✅ У Криму зараз все чисто.")
+
+async def odesa_alerts(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    active = await region_status("одес")
+    chat_id = update.effective_chat.id
+    if active:
+        await update.message.reply_text("🚨 В Одеській області триває тривога!")
+    else:
+        await update.message.reply_text("✅ В Одеській області зараз все чисто.")
+
+async def oblast_alerts(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    active = await region_status("київська")
+    chat_id = update.effective_chat.id
+    if active:
+        await update.message.reply_text("🚨 У Київській області триває тривога!")
+    else:
+        await update.message.reply_text("✅ У Київській області зараз все чисто.")
+
+async def kyiv_alerts(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    active = await region_status("київ")
+    chat_id = update.effective_chat.id
+    if active:
+        await update.message.reply_text("🚨 У Києві триває тривога!")
+    else:
+        await update.message.reply_text("✅ У Києві зараз все чисто.")
+
+async def lugansk_alerts(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    active = await region_status("луган")
+    chat_id = update.effective_chat.id
+    if active:
+        await update.message.reply_text("🚨 У Луганській області триває тривога!")
+    else:
+        await update.message.reply_text("✅ У Луганській області зараз все чисто.")
+
+async def chernihiv_alerts(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    active = await region_status("черніг")
+    chat_id = update.effective_chat.id
+    if active:
+        await update.message.reply_text("🚨 У Чернігівській області триває тривога!")
+    else:
+        await update.message.reply_text("✅ У Чернігівській області зараз все чисто.")
+
+# ======================================================
+# 🔹 Хендлер словникових запитів
 # ======================================================
 async def handle_dynamic_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обробка запиту виду 'що по <назві>' згідно зі словником."""
+    """Обробка запитів виду 'що по <назві>' згідно зі словником."""
     text = (update.message.text or "").lower().strip()
-    locations = context.application.bot_data.get("locations_dict", {}).get("Київська область", {})
 
-    keyword = text.replace("що по", "").replace("?", "").strip()
-    if not keyword:
+    # ігноруємо спеціальні команди
+    if any(x in text for x in ["що по області", "що по києву", "що по крим", "що по одес", "що по луган", "що по франик", "що по черніг"]):
         return
 
-    region = locations.get(keyword)
+    locations = context.application.bot_data.get("locations_dict", {}).get("Київська область", {})
+    keyword = text.replace("що по", "").replace("?", "").strip().lower()
+
+    region = None
+    # точний збіг
+    for key, val in locations.items():
+        if keyword == key.lower():
+            region = val
+            break
+    # частковий збіг
+    if not region:
+        for key, val in locations.items():
+            if keyword in key.lower():
+                region = val
+                break
+
     if not region:
         await update.message.reply_text("🤔 Я ще не знаю такого населеного пункту. Його можна додати до словника.")
         return
@@ -173,8 +253,9 @@ async def handle_dynamic_query(update: Update, context: ContextTypes.DEFAULT_TYP
 # ======================================================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.application.bot_data["chat_id"] = update.effective_chat.id
-    await update.message.reply_text("Привіт 🌸\nЯ повідомляю про тривоги у Київській області.\n"
-                                    "Спробуй: «що по ірпеню?» або «що по борисполю?»")
+    await update.message.reply_text("Привіт 🌸\n"
+                                    "Я повідомляю про тривоги у Київській області.\n"
+                                    "Можеш спробувати: «що по ірпеню?» або «що по борисполю?»")
 
 async def stopbot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
@@ -208,19 +289,24 @@ async def main():
         app.bot_data["chat_id"] = DEFAULT_CHAT_ID
         app.bot_data["default_chat_id"] = DEFAULT_CHAT_ID
 
-    # кеш тривог
     cache = RegionAlertCache()
     app.bot_data["alert_cache"] = cache
 
-    # завантаження словника
     locations_dict = load_locations_dict()
     app.bot_data["locations_dict"] = locations_dict
 
-    # команди
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("stopbot", stopbot))
 
-    # обробка тексту зі словником
+    # старі ручні запити
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex("(?i)що по області"), oblast_alerts))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex("(?i)що по києву"), kyiv_alerts))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex("(?i)як там крим"), krym_alerts))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex("(?i)що по одес"), odesa_alerts))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex("(?i)що по луган"), lugansk_alerts))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex("(?i)що по черніг"), chernihiv_alerts))
+
+    # словниковий аддон (останнім)
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex("(?i)^що по "), handle_dynamic_query))
 
     app.add_error_handler(error_handler)
