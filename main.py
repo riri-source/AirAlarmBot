@@ -91,6 +91,25 @@ async def _get_api_data():
             return await resp.json()
 
 # ======================================================
+# 🔹 Надсилання адміну списку всіх областей з API
+# ======================================================
+async def send_all_oblasts_to_admin(bot, admin_id: int):
+    """Надсилає адміну список усіх областей, які бачить API."""
+    try:
+        data = await _get_api_data()
+        oblasts = sorted({a.get("location_oblast") for a in data.get("alerts", []) if a.get("location_oblast")})
+        if not oblasts:
+            await bot.send_message(chat_id=admin_id, text="⚠️ API не повернуло жодної області.")
+            return
+
+        text = "🧭 *Список областей, які бачить API:*\n\n"
+        text += "\n".join(f"• {o}" for o in oblasts)
+        await bot.send_message(chat_id=admin_id, text=text, parse_mode="Markdown")
+
+    except Exception as e:
+        await bot.send_message(chat_id=admin_id, text=f"❌ Помилка при запиті до API:\n{e}")
+
+# ======================================================
 # 🔹 Завантаження зовнішнього словника
 # ======================================================
 def load_locations_dict(file_path: str = None) -> Dict:
@@ -111,15 +130,12 @@ def load_locations_dict(file_path: str = None) -> Dict:
         return {}
 
 # ======================================================
-# 🔹 МРЧ — моніторинг Київської області + Тестового регіону
+# 🔹 МРЧ — моніторинг Київської області + тестового регіону
 # ======================================================
 async def process_alerts(app, cache: RegionAlertCache):
     data = await _get_api_data()
     alerts = data.get("alerts", [])
-    relevant = [
-        a for a in alerts
-        if a.get("location_oblast") in {"Київська область", "м. Київ", "Тестовий регіон"}
-    ]
+    relevant = [a for a in alerts if a.get("location_oblast") in {"Київська область", "м. Київ", "Тестовий регіон"}]
     new_state = {a["location_title"]: a["alert_type"] for a in relevant}
     chat_id = get_chat_id(app)
     admin_chat = int(ADMIN_ID)
@@ -132,9 +148,12 @@ async def process_alerts(app, cache: RegionAlertCache):
 
     for raion, alert_type in new_state.items():
         oblast = next((a.get("location_oblast") for a in alerts if a.get("location_title") == raion), "")
-        is_test_region = "тестов" in oblast.lower()
-        target_chat = admin_chat if is_test_region else chat_id
-        prefix = "🧪 [ТЕСТ]" if is_test_region else "🚨"
+        if "тестов" in oblast.lower():
+            target_chat = admin_chat
+            prefix = "🧪 [ТЕСТ]"
+        else:
+            target_chat = chat_id
+            prefix = "🚨"
 
         if cache.last_alerts.get(raion) != alert_type and target_chat:
             await send_photo_safe(app.bot, target_chat, "images/Alarm.jpg")
@@ -144,13 +163,17 @@ async def process_alerts(app, cache: RegionAlertCache):
                 parse_mode="Markdown",
             )
 
-    # Відбої
+    # відбої
     for raion in list(cache.last_alerts.keys()):
         if raion not in new_state:
             oblast = next((a.get("location_oblast") for a in alerts if a.get("location_title") == raion), "")
-            is_test_region = "тестов" in oblast.lower()
-            target_chat = admin_chat if is_test_region else chat_id
-            prefix = "🧪 [ТЕСТ]" if is_test_region else "✅"
+            if "тестов" in oblast.lower():
+                target_chat = admin_chat
+                prefix = "🧪 [ТЕСТ]"
+            else:
+                target_chat = chat_id
+                prefix = "✅"
+
             if target_chat:
                 await app.bot.send_message(
                     chat_id=target_chat,
@@ -237,7 +260,6 @@ async def handle_dynamic_query(update: Update, context: ContextTypes.DEFAULT_TYP
 
     locations = context.application.bot_data.get("locations_dict", {}).get("Київська область", {})
     keyword = text.replace("що по", "").replace("?", "").strip().lower()
-
     region = None
     for key, val in locations.items():
         if keyword == key.lower() or keyword in key.lower():
@@ -302,6 +324,9 @@ async def main():
     locations_dict = load_locations_dict()
     app.bot_data["locations_dict"] = locations_dict
 
+    # 🔹 Надсилаємо адміну перелік областей
+    await send_all_oblasts_to_admin(app.bot, ADMIN_ID)
+
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("stopbot", stopbot))
 
@@ -312,8 +337,8 @@ async def main():
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex("(?i)що по франику|що по івано-франківську|що по франківську"), frankivsk_alerts))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex("(?i)що по луган"), lugansk_alerts))
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex("(?i)що по черніг"), chernihiv_alerts))
-
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex("(?i)^що по "), handle_dynamic_query))
+
     app.add_error_handler(error_handler)
 
     async def _poll(context: ContextTypes.DEFAULT_TYPE):
