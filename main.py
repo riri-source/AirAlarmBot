@@ -107,6 +107,8 @@ async def process_alerts(app, cache: RegionAlertCache):
     new_state = {a["location_title"]: a["alert_type"] for a in relevant}
     chat_id = get_chat_id(app)
 
+    logging.info(f"⏱ Перевірка Київська область @ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
     if not cache.initialized:
         cache.last_alerts = new_state
         cache.initialized = True
@@ -143,7 +145,7 @@ async def process_alerts(app, cache: RegionAlertCache):
     cache.last_alerts = new_state
 
 # ======================================================
-# 🔹 Ручні запити (Крим, Луганська, Чернігівська, інші)
+# 🔹 Ручні запити
 # ======================================================
 async def region_status(keyword: str) -> bool:
     """Повертає True, якщо знайдено тривогу для вказаного регіону."""
@@ -158,6 +160,7 @@ async def region_status(keyword: str) -> bool:
     return False
 
 
+# ----- окремі регіони -----
 async def krym_alerts(update: Update, context: ContextTypes.DEFAULT_TYPE):
     active = await region_status("крим")
     chat_id = update.effective_chat.id
@@ -217,10 +220,10 @@ async def odesa_alerts(update: Update, context: ContextTypes.DEFAULT_TYPE):
     active = await region_status("одес")
     chat_id = update.effective_chat.id
     if active:
-        await update.message.reply_text("🚨 У Одеській області триває тривога!")
+        await update.message.reply_text("🚨 В Одеській області триває тривога!")
         await send_photo_safe(context.application.bot, chat_id, "images/Alarm.jpg")
     else:
-        await update.message.reply_text("✅ У Одеській області зараз все чисто.")
+        await update.message.reply_text("✅ В Одеській області зараз все чисто.")
         await send_photo_safe(context.application.bot, chat_id, "images/Saefty.jpg")
 
 
@@ -228,10 +231,10 @@ async def frankivsk_alerts(update: Update, context: ContextTypes.DEFAULT_TYPE):
     active = await region_status("франк")
     chat_id = update.effective_chat.id
     if active:
-        await update.message.reply_text("🚨 У Івано-Франківській області триває тривога!")
+        await update.message.reply_text("🚨 В Івано-Франківській області триває тривога!")
         await send_photo_safe(context.application.bot, chat_id, "images/Alarm.jpg")
     else:
-        await update.message.reply_text("✅ У Івано-Франківській області зараз все чисто.")
+        await update.message.reply_text("✅ В Івано-Франківській області зараз все чисто.")
         await send_photo_safe(context.application.bot, chat_id, "images/Saefty.jpg")
 
 # ======================================================
@@ -304,6 +307,7 @@ async def main():
         await process_alerts(context.application, cache)
 
     app.job_queue.run_repeating(_poll, interval=POLL_INTERVAL, first=0)
+    app.job_queue.start()  # ✅ обов’язковий запуск JobQueue
 
     logging.info("✅ Бот запущено й готовий до роботи.")
     await app.run_polling(close_loop=False)
