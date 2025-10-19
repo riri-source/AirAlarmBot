@@ -46,6 +46,7 @@ class StubHandler(BaseHTTPRequestHandler):
 def run_http_server():
     port = int(os.environ.get("PORT", 10000))
     HTTPServer(("0.0.0.0", port), StubHandler).serve_forever()
+
 Thread(target=run_http_server, daemon=True).start()
 
 # ======================================================
@@ -78,8 +79,10 @@ def _dict_path() -> str:
 def load_locations_dict() -> Dict:
     path = _dict_path()
     if not os.path.exists(path):
-        with open(path, "w", encoding="utf-8") as f: json.dump({}, f, ensure_ascii=False, indent=2)
-    with open(path, "r", encoding="utf-8") as f: return json.load(f)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump({}, f, ensure_ascii=False, indent=2)
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
 
 def save_locations_dict(data: Dict):
     with open(_dict_path(), "w", encoding="utf-8") as f:
@@ -92,10 +95,22 @@ async def _get_api_data():
             return await r.json()
 
 async def send_photo_safe(bot, chat_id: Optional[int], image_path: str):
-    if not chat_id: return
+    if not chat_id:
+        return
     try:
         with open(image_path, "rb") as ph:
             await bot.send_photo(chat_id=chat_id, photo=ph)
+    except Exception:
+        pass
+
+# ======================================================
+# 🔹 Обробник помилок
+# ======================================================
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
+    logging.error("⚠️ Помилка:", exc_info=context.error)
+    try:
+        if update and hasattr(update, "message") and update.message:
+            await update.message.reply_text("⚠️ Виникла непередбачена помилка. Спробуй пізніше.")
     except Exception:
         pass
 
@@ -143,7 +158,7 @@ async def process_alerts(app, cache: RegionAlertCache):
     app.bot_data["last_global_alerts"] = new_state_global
 
 # ======================================================
-# 🔹 Команди /start, /help, /listregions, /exportdict
+# 🔹 Команди /start, /help, /listregions, /exportdict, /stopbot
 # ======================================================
 async def start(update, ctx):
     ctx.application.bot_data["chat_id"] = update.effective_chat.id
@@ -198,32 +213,23 @@ async def export_dict(update, ctx):
     data = ctx.application.bot_data.get("locations_dict", {})
     await update.message.reply_text(f"<pre>{json.dumps(data, ensure_ascii=False, indent=2)}</pre>", parse_mode="HTML")
 
-# ======================================================
-# 🔹 Інше
-# ======================================================
 async def stopbot(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         await update.message.reply_text("⛔️ Лише адміністратор.")
         return
 
     await update.message.reply_text("🛑 Зупиняю роботу...")
-
     try:
-        # зупиняємо JobQueue коректно
         await ctx.application.job_queue.stop()
-
-        # завершуємо опитування
         await ctx.application.stop_running()
         await ctx.application.shutdown()
         await ctx.application.stop()
-
         await update.message.reply_text("✅ KytsjaAlarm повністю зупинено.")
         logging.info("🛑 Бот зупинено адміністратором.")
-        os._exit(0)  # завершення процесу (щоб Render або systemd бачили як exit)
+        os._exit(0)
     except Exception as e:
         logging.error(f"Помилка при зупинці: {e}")
         await update.message.reply_text(f"⚠️ Не вдалося завершити повністю: {e}")
-
 
 # ======================================================
 # 🔹 Основний цикл
