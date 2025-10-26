@@ -120,7 +120,7 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
 async def process_alerts(app, cache: RegionAlertCache):
     data = await _get_api_data()
     alerts = data.get("alerts", []) or []
-    chat_id = app.bot_data.get("chat_id")
+    chat_id = DEFAULT_CHAT_ID #app.bot_data.get("chat_id")
 
     # Київщина + Київ -> група
     relevant_kyiv = [a for a in alerts if a.get("location_oblast") in {"Київська область", "м. Київ"}]
