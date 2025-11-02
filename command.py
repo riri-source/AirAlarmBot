@@ -28,6 +28,7 @@ async def startbot_command(update, ctx):
             Отримую поточні тривоги...")
 
     data = await get_api_data()
+    updates = await get_api_updates()
     alerts = data.get("alerts", []) or []
     if not alerts:
         msg = "✅ Зараз по всій Україні спокійно."
@@ -42,7 +43,7 @@ async def startbot_command(update, ctx):
         msg = "🗺 <b>Актуальні тривоги:</b>\n" + "\n".join(lines)
         msg = msg + f"CHAT_ID_ENV: {CHAT_ID_ENV}\n"
         msg = msg + f"\nADMIN_ID: {ADMIN_ID}\n"
-        msg = msg + get_api_updates()
+        msg = msg + updates
 
     await ctx.bot.send_message(chat_id=ADMIN_ID, text=msg, parse_mode="HTML")
 
