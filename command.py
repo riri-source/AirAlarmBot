@@ -62,7 +62,6 @@ async def stopbot_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         # Обробляємо помилки, якщо не вдалося коректно вимкнутися
         print(f"Помилка при зупинці: {e}")
-        await update.message.reply_text(f"⚠️ Не вдалося завершити повністю: {e}")
 
     # Примусово завершуємо процес, щоб вийти з loop.run_forever()
     os._exit(0)
