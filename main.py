@@ -17,7 +17,7 @@ from telegram.ext import (
 )
 
 from config import *
-from command import (help_command, stopbot)
+from command import (help_command, startbot_command, stopbot_command)
 
 logging.basicConfig(level=logging.INFO)
 
@@ -71,6 +71,8 @@ async def _get_api_data():
 
 async def send_photo_safe(bot, chat_id: Optional[int], image_path: str):
     if not chat_id:
+        logging.error("⚠️ Помилка send_photo_safe, no chat_id:",
+                      exc_info=context.error)
         return
     try:
         with open(image_path, "rb") as ph:
@@ -95,7 +97,7 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
 async def process_alerts(app, cache: RegionAlertCache):
     data = await _get_api_data()
     alerts = data.get("alerts", []) or []
-    chat_id = DEFAULT_CHAT_ID #app.bot_data.get("chat_id")
+    chat_id = app.bot_data.get("chat_id")
 
     # Київщина + Київ -> група
     relevant_kyiv = [a for a in alerts if a.get("location_oblast") in {"Київська область", "м. Київ"}]
@@ -118,12 +120,15 @@ async def process_alerts(app, cache: RegionAlertCache):
             await app.bot.send_message(
                 chat_id=chat_id,
                 text=f"🚨 *{r}* — *{ALERT_TYPES_UA.get(t or 'air_raid', 'Повітряна тривога!')}*",
-                parse_mode="Markdown"
-            )
+                parse_mode="Markdown")
+
+
     # Київщина → група (відбої)
     for r in list(cache.last_alerts.keys()):
         if r not in new_state_kyiv and chat_id:
-            await app.bot.send_message(chat_id=chat_id, text=f"✅ Відбій тривоги у *{r}*", parse_mode="Markdown")
+            await app.bot.send_message(chat_id=chat_id,
+                 text=f"✅ Відбій тривоги у *{r}*", parse_mode="Markdown")
+
     # Загальний відбій у Київській
     if cache.last_alerts and not new_state_kyiv and chat_id:
         await app.bot.send_message(chat_id=chat_id, text=f"✅ Відбій тривоги у {REGION}")
@@ -342,30 +347,6 @@ async def handle_admin_number_choice(update: Update, context: ContextTypes.DEFAU
 # ======================================================
 # 🔹 Команди /start, /help, /listregions, /exportdict, /stopbot
 # ======================================================
-async def start(update, ctx):
-    """Пуск і коротке зведення актуальних тривог адміну."""
-    ctx.application.bot_data["chat_id"] = update.effective_chat.id
-    await update.message.reply_text("Привіт 🌸 KytsjaAlarm запущено.\nОтримую поточні тривоги...")
-
-    data = await _get_api_data()
-    alerts = data.get("alerts", []) or []
-    if not alerts:
-        msg = "✅ Зараз по всій Україні спокійно."
-    else:
-        lines = []
-        for a in alerts:
-            t = a.get("alert_type") or "air_raid"
-            lines.append(
-                f"🚨 {a.get('location_oblast')} — {a.get('location_title')}: "
-                f"{ALERT_TYPES_UA.get(t, 'Повітряна тривога!')}"
-            )
-        msg = "🗺 <b>Актуальні тривоги:</b>\n" + "\n".join(lines)
-
-    await ctx.bot.send_message(chat_id=ADMIN_ID, text=msg, parse_mode="HTML")
-
-    if update.effective_chat.type in ("group", "supergroup"):
-        await update.message.reply_text("✅ Бот активний. Моніторю Київську область.")
-
 
 async def list_regions(update, ctx):
     await update.message.reply_text("⏳ Отримую список областей...")
@@ -396,9 +377,9 @@ async def main():
     app.bot_data["locations_dict"] = load_locations_dict()
 
     # Команди
-    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("start", startbot_command))
     app.add_handler(CommandHandler("help", help_command))
-    app.add_handler(CommandHandler("stopbot", stopbot)) # ВИКОРИСТОВУЄМО ВИПРАВЛЕНУ
+    app.add_handler(CommandHandler("stopbot", stopbot_command))
     app.add_handler(CommandHandler("listregions", list_regions))
     app.add_handler(CommandHandler("exportdict", export_dict))
 

@@ -7,7 +7,38 @@ from telegram.ext import (
 )
 from config import *
 
-async def stopbot(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+async def get_api_data():
+    headers = {"Authorization": f"Bearer {ALERTS_TOKEN}"}
+    async with aiohttp.ClientSession() as s:
+        async with s.get(API_URL, headers=headers, timeout=10) as r:
+            return await r.json()
+
+async def startbot_command(update, ctx):
+    """Пуск і коротке зведення актуальних тривог адміну."""
+    ctx.application.bot_data["chat_id"] = update.effective_chat.id
+    await update.message.reply_text("Привіт 🌸 KytsjaAlarm запущено.\n\
+            Отримую поточні тривоги...")
+
+    data = await get_api_data()
+    alerts = data.get("alerts", []) or []
+    if not alerts:
+        msg = "✅ Зараз по всій Україні спокійно."
+    else:
+        lines = []
+        for a in alerts:
+            t = a.get("alert_type") or "air_raid"
+            lines.append(
+                f"🚨 {a.get('location_oblast')} — {a.get('location_title')}: "
+                f"{ALERT_TYPES_UA.get(t, 'Повітряна тривога!')}"
+            )
+        msg = "🗺 <b>Актуальні тривоги:</b>\n" + "\n".join(lines)
+
+    await ctx.bot.send_message(chat_id=ADMIN_ID, text=msg, parse_mode="HTML")
+
+    if update.effective_chat.type in ("group", "supergroup"):
+        await update.message.reply_text("✅ Бот активний. Моніторю Київську область.")
+
+async def stopbot_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         await update.message.reply_text("⛔️ Лише адміністратор.")
         return
