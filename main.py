@@ -17,7 +17,8 @@ from telegram.ext import (
 )
 
 from config import *
-from command import (help_command, startbot_command, stopbot_command)
+from command import (help_command, startbot_command,
+                    stopbot_command, listregions_command, exportdict_command)
 
 logging.basicConfig(level=logging.INFO)
 
@@ -336,19 +337,6 @@ async def handle_admin_number_choice(update: Update, context: ContextTypes.DEFAU
 # 🔹 Команди /start, /help, /listregions, /exportdict, /stopbot
 # ======================================================
 
-async def list_regions(update, ctx):
-    await update.message.reply_text("⏳ Отримую список областей...")
-    data = await _get_api_data()
-    regs = sorted(set(a.get("location_oblast") for a in (data.get("alerts", []) or []) if a.get("location_oblast")))
-    txt = "🧭 Список областей, які бачить API:\n\n" + "\n".join(f"• {r}" for r in regs) if regs else "❌ API не повернуло даних."
-    await update.message.reply_text(txt)
-
-async def export_dict(update, ctx):
-    if update.effective_user.id != ADMIN_ID:
-        return
-    data = ctx.application.bot_data.get("locations_dict", {})
-    await update.message.reply_text(f"<pre>{json.dumps(data, ensure_ascii=False, indent=2)}</pre>", parse_mode="HTML")
-
 
 # ======================================================
 # 🔹 Основний цикл
@@ -368,8 +356,8 @@ async def main():
     app.add_handler(CommandHandler("start", startbot_command))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("stopbot", stopbot_command))
-    app.add_handler(CommandHandler("listregions", list_regions))
-    app.add_handler(CommandHandler("exportdict", export_dict))
+    app.add_handler(CommandHandler("listregions", listregions_command))
+    app.add_handler(CommandHandler("exportdict", exportdict_command))
 
     # Ручні запити (фрази)
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex("(?i)що по області"), oblast_alerts))

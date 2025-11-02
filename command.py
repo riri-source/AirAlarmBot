@@ -86,3 +86,23 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "\n\n🐾 Версія: KytsjaAlarm v9.3.4 Final"
     )
     await update.message.reply_text(help_text, parse_mode="HTML")
+
+async def listregions_command(update, ctx):
+    await update.message.reply_text("⏳ Отримую список областей...")
+
+    data = await _get_api_data()
+    regs = sorted(set(a.get("location_oblast") for a in (
+        data.get("alerts", []) or []) if a.get("location_oblast")))
+    txt = "🧭 Список областей, які бачить API:\n\n" + "\n".join(
+            f"• {r}" for r in regs) if regs else "❌ API не повернуло даних."
+
+    await update.message.reply_text(txt)
+
+async def exportdict_command(update, ctx):
+    if update.effective_user.id != ADMIN_ID:
+        return
+    data = ctx.application.bot_data.get("locations_dict", {})
+    await update.message.reply_text(
+            f"<pre>{json.dumps(data, ensure_ascii=False, indent=2)}</pre>",
+            parse_mode="HTML")
+
