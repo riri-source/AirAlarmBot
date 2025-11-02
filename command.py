@@ -34,6 +34,8 @@ async def startbot_command(update, ctx):
                 f"{ALERT_TYPES_UA.get(t, 'Повітряна тривога!')}"
             )
         msg = "🗺 <b>Актуальні тривоги:</b>\n" + "\n".join(lines)
+        msg = msg + "\nCHAT_ID_ENV: {CHAT_ID_ENV}\n"
+        msg = msg + "\nADMIN_ID: {ADMIN_ID}\n"
 
     await ctx.bot.send_message(chat_id=ADMIN_ID, text=msg, parse_mode="HTML")
 

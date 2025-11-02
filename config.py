@@ -22,6 +22,6 @@ ALERTS_TOKEN = os.getenv("ALERTS_TOKEN")
 REGION = os.getenv("REGION", "Київська область")
 POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", 25))
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
-CHAT_ID_ENV = os.getenv("CHAT_ID")
+CHAT_ID_ENV = int(os.getenv("CHAT_ID", "0"))
 DEFAULT_CHAT_ID = int(CHAT_ID_ENV) if CHAT_ID_ENV else None
 
