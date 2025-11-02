@@ -19,14 +19,6 @@ from telegram.ext import (
 from config import *
 from command import (help_command, stopbot)
 
-# ======================================================
-# 🔹 Завантаження середовища
-# ======================================================
-load_dotenv()
-logging.basicConfig(level=logging.INFO)
-
-API_URL = "https://api.alerts.in.ua/v1/alerts/active.json"
-
 if not BOT_TOKEN or not ALERTS_TOKEN:
     raise RuntimeError("❌ BOT_TOKEN або ALERTS_TOKEN не задано")
 

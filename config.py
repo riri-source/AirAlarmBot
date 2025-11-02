@@ -1,6 +1,10 @@
 import os
 from dotenv import load_dotenv
 
+load_dotenv()
+logging.basicConfig(level=logging.INFO)
+
+API_URL = "https://api.alerts.in.ua/v1/alerts/active.json"
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ALERTS_TOKEN = os.getenv("ALERTS_TOKEN")
 REGION = os.getenv("REGION", "Київська область")
