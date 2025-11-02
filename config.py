@@ -18,6 +18,7 @@ KYIV_REGIONS = [
 
 API_URL = "https://api.alerts.in.ua/v1/alerts/active.json"
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+API_UPDATES_URL = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates"
 ALERTS_TOKEN = os.getenv("ALERTS_TOKEN")
 REGION = os.getenv("REGION", "Київська область")
 POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", 25))

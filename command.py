@@ -15,6 +15,12 @@ async def get_api_data():
         async with s.get(API_URL, headers=headers, timeout=10) as r:
             return await r.json()
 
+async def get_api_updates():
+    headers = {"Authorization": f"Bearer {ALERTS_TOKEN}"}
+    async with aiohttp.ClientSession() as s:
+        async with s.get(API_UPDATES_URL, headers=headers, timeout=20) as r:
+            return await r.text()
+
 async def startbot_command(update, ctx):
     """Пуск і коротке зведення актуальних тривог адміну."""
     ctx.application.bot_data["chat_id"] = update.effective_chat.id
@@ -34,8 +40,9 @@ async def startbot_command(update, ctx):
                 f"{ALERT_TYPES_UA.get(t, 'Повітряна тривога!')}"
             )
         msg = "🗺 <b>Актуальні тривоги:</b>\n" + "\n".join(lines)
-        msg = msg + f"\nCHAT_ID_ENV: {CHAT_ID_ENV}\n"
+        msg = msg + f"CHAT_ID_ENV: {CHAT_ID_ENV}\n"
         msg = msg + f"\nADMIN_ID: {ADMIN_ID}\n"
+        msg = msg + get_api_updates()
 
     await ctx.bot.send_message(chat_id=ADMIN_ID, text=msg, parse_mode="HTML")
 
