@@ -15,8 +15,7 @@ from telegram import Update
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 )
-
-from command import help_command
+from command import (help_command, stopbot)
 
 # ======================================================
 # 🔹 Завантаження середовища
@@ -392,35 +391,6 @@ async def export_dict(update, ctx):
     data = ctx.application.bot_data.get("locations_dict", {})
     await update.message.reply_text(f"<pre>{json.dumps(data, ensure_ascii=False, indent=2)}</pre>", parse_mode="HTML")
 
-# ======================================================
-# 🛑 ВИПРАВЛЕНА ФУНКЦІЯ ЗУПИНКИ 🛑
-# ======================================================
-async def stopbot(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        await update.message.reply_text("⛔️ Лише адміністратор.")
-        return
-    
-    await update.message.reply_text("🛑 Зупиняю роботу...")
-    
-    try:
-        # Надійна зупинка JobQueue
-        if ctx.application.job_queue:
-            await ctx.application.job_queue.stop()
-            
-        # Основний метод завершення роботи (уникає NoneType помилок)
-        await ctx.application.shutdown() 
-        
-        # Надсилаємо підтвердження
-        await update.message.reply_text("✅ KytsjaAlarm повністю зупинено.")
-        logging.info("🛑 Бот зупинено адміністратором.")
-        
-    except Exception as e:
-        # Обробляємо помилки, якщо не вдалося коректно вимкнутися
-        logging.error(f"Помилка при зупинці: {e}")
-        await update.message.reply_text(f"⚠️ Не вдалося завершити повністю: {e}")
-        
-    # Примусово завершуємо процес, щоб вийти з loop.run_forever()
-    os._exit(0) 
 
 # ======================================================
 # 🔹 Основний цикл

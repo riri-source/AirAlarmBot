@@ -6,6 +6,33 @@ from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 )
 
+async def stopbot(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("⛔️ Лише адміністратор.")
+        return
+
+    await update.message.reply_text("🛑 Зупиняю роботу...")
+
+    try:
+        # Надійна зупинка JobQueue
+        if ctx.application.job_queue:
+            await ctx.application.job_queue.stop()
+
+        # Основний метод завершення роботи (уникає NoneType помилок)
+        await ctx.application.shutdown() 
+
+        # Надсилаємо підтвердження
+        await update.message.reply_text("✅ KytsjaAlarm повністю зупинено.")
+        logging.info("🛑 Бот зупинено адміністратором.")
+
+    except Exception as e:
+        # Обробляємо помилки, якщо не вдалося коректно вимкнутися
+        logging.error(f"Помилка при зупинці: {e}")
+        await update.message.reply_text(f"⚠️ Не вдалося завершити повністю: {e}")
+
+    # Примусово завершуємо процес, щоб вийти з loop.run_forever()
+    os._exit(0)
+
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     help_text = (
         "🧭 <b>Команди KytsjaAlarm Bot</b>\n\n"
