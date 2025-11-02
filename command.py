@@ -24,12 +24,10 @@ async def get_api_updates():
 async def startbot_command(update, ctx):
     """Пуск і коротке зведення актуальних тривог адміну."""
     ctx.application.bot_data["chat_id"] = update.effective_chat.id
+    await update.message.reply_text(f"Привіт 🌸 KytsjaAlarm запущено.\n\
+            Отримую поточні тривоги...")
 
     data = await get_api_data()
-    updates = await get_api_updates()
-    await update.message.reply_text(f"Привіт 🌸 KytsjaAlarm запущено.\n\
-            Отримую поточні тривоги...\n{updates}\n \
-            {update.effective_chat.id}")
 
     alerts = data.get("alerts", []) or []
     if not alerts:
@@ -45,7 +43,6 @@ async def startbot_command(update, ctx):
         msg = "🗺 <b>Актуальні тривоги:</b>\n" + "\n".join(lines)
         msg = msg + f"CHAT_ID_ENV: {CHAT_ID_ENV}\n"
         msg = msg + f"\nADMIN_ID: {ADMIN_ID}\n"
-        msg = msg + updates
 
     await ctx.bot.send_message(chat_id=ADMIN_ID, text=msg, parse_mode="HTML")
 
