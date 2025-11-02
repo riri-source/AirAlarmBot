@@ -334,11 +334,6 @@ async def handle_admin_number_choice(update: Update, context: ContextTypes.DEFAU
         return
 
 # ======================================================
-# 🔹 Команди /start, /help, /listregions, /exportdict, /stopbot
-# ======================================================
-
-
-# ======================================================
 # 🔹 Основний цикл
 # ======================================================
 async def main():
@@ -355,7 +350,7 @@ async def main():
     # Команди
     app.add_handler(CommandHandler("start", startbot_command))
     app.add_handler(CommandHandler("help", help_command))
-    app.add_handler(CommandHandler("stopbot", stopbot_command))
+    app.add_handler(CommandHandler("stop", stopbot_command))
     app.add_handler(CommandHandler("listregions", listregions_command))
     app.add_handler(CommandHandler("exportdict", exportdict_command))
 
