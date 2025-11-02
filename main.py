@@ -16,6 +16,8 @@ from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 )
 
+from command import help_command
+
 # ======================================================
 # 🔹 Завантаження середовища
 # ======================================================
@@ -292,9 +294,12 @@ async def handle_admin_number_choice(update: Update, context: ContextTypes.DEFAU
     """Адмін обирає область (крок 1) або район Київщини (крок 2)."""
     if update.effective_user.id != ADMIN_ID:
         return
+
     t = (update.message.text or "").strip()
+
     if not t.isdigit():
         return
+
     idx = int(t) - 1
     app_data = context.application.bot_data
 
@@ -373,26 +378,6 @@ async def start(update, ctx):
     if update.effective_chat.type in ("group", "supergroup"):
         await update.message.reply_text("✅ Бот активний. Моніторю Київську область.")
 
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    help_text = (
-        "🧭 <b>Команди KytsjaAlarm Bot</b>\n\n"
-        "📍 <b>Основні:</b>\n"
-        "<code>/start</code> — запустити бота або перевірити стан\n"
-        "<code>/help</code> — показати цей список команд\n"
-        "<code>/stopbot</code> — зупинити бота (адміністратор)\n\n"
-        "📡 <b>Моніторинг і запити:</b>\n"
-        "<code>/listregions</code> — показати області, які бачить API\n"
-        "<code>/exportdict</code> — показати поточний словник назв (адміністратор)\n\n"
-        "🗺 <b>Текстові запити:</b>\n"
-        "«що по області» — Київська область\n"
-        "«що по Києву» — м. Київ\n"
-        "«як там Крим?» — Крим\n"
-        "«що по Франику» — Івано-Франківська область\n"
-        "«що по &lt;назві&gt;» — будь-який населений пункт зі словника\n\n"
-        "📩 Якщо боту невідомий пункт — він запитає, чи надіслати адміну для додавання."
-        "\n\n🐾 Версія: KytsjaAlarm v9.3.4 Final"
-    )
-    await update.message.reply_text(help_text, parse_mode="HTML")
 
 async def list_regions(update, ctx):
     await update.message.reply_text("⏳ Отримую список областей...")
@@ -444,9 +429,8 @@ async def main():
     nest_asyncio.apply()
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    if DEFAULT_CHAT_ID:
-        app.bot_data["chat_id"] = DEFAULT_CHAT_ID
-        app.bot_data["default_chat_id"] = DEFAULT_CHAT_ID
+    app.bot_data["chat_id"] = DEFAULT_CHAT_ID
+    app.bot_data["default_chat_id"] = DEFAULT_CHAT_ID
 
     cache = RegionAlertCache()
     app.bot_data["alert_cache"] = cache
