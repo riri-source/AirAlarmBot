@@ -28,7 +28,8 @@ async def startbot_command(update, ctx):
     data = await get_api_data()
     updates = await get_api_updates()
     await update.message.reply_text(f"Привіт 🌸 KytsjaAlarm запущено.\n\
-            Отримую поточні тривоги...\n{updates}")
+            Отримую поточні тривоги...\n{updates}\n \
+            {update.effective_chat.id}")
 
     alerts = data.get("alerts", []) or []
     if not alerts:
