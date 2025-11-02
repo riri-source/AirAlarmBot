@@ -16,38 +16,14 @@ from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 )
 
-# ======================================================
-# 🔹 Завантаження середовища
-# ======================================================
-load_dotenv()
-logging.basicConfig(level=logging.INFO)
+from config import *
+from command import (help_command, startbot_command,
+                    stopbot_command, listregions_command, exportdict_command)
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-ALERTS_TOKEN = os.getenv("ALERTS_TOKEN")
-REGION = os.getenv("REGION", "Київська область")
-POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", 25))
-ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
-CHAT_ID_ENV = os.getenv("CHAT_ID")
-DEFAULT_CHAT_ID = int(CHAT_ID_ENV) if CHAT_ID_ENV else None
-API_URL = "https://api.alerts.in.ua/v1/alerts/active.json"
+logging.basicConfig(level=logging.INFO)
 
 if not BOT_TOKEN or not ALERTS_TOKEN:
     raise RuntimeError("❌ BOT_TOKEN або ALERTS_TOKEN не задано")
-
-# ======================================================
-# 🔹 Healthcheck-сервер
-# ======================================================
-class StubHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(b"OK")
-
-def run_http_server():
-    port = int(os.environ.get("PORT", 10000))
-    HTTPServer(("0.0.0.0", port), StubHandler).serve_forever()
-
-Thread(target=run_http_server, daemon=True).start()
 
 # ======================================================
 # 🔹 Класи і константи
@@ -57,18 +33,6 @@ class RegionAlertCache:
     last_alerts: Dict[str, str] = field(default_factory=dict)  # {location_title: alert_type}
     initialized: bool = False
 
-ALERT_TYPES_UA = {
-    "air_raid": "Повітряна тривога!",
-    "chemical": "Хімічна тривога",
-    "radiation": "Радіаційна тривога",
-    "other": "Інша тривога",
-}
-
-KYIV_REGIONS = [
-    "Бучанський район", "Вишгородський район", "Фастівський район",
-    "Обухівський район", "Білоцерківський район", "Бориспільський район",
-    "Броварський район", "м. Київ"
-]
 
 # ======================================================
 # 🔹 Хелпери (словник, API, зображення)
@@ -96,6 +60,8 @@ async def _get_api_data():
 
 async def send_photo_safe(bot, chat_id: Optional[int], image_path: str):
     if not chat_id:
+        logging.error("⚠️ Помилка send_photo_safe, no chat_id:",
+                      exc_info=context.error)
         return
     try:
         with open(image_path, "rb") as ph:
@@ -120,7 +86,7 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
 async def process_alerts(app, cache: RegionAlertCache):
     data = await _get_api_data()
     alerts = data.get("alerts", []) or []
-    chat_id = DEFAULT_CHAT_ID #app.bot_data.get("chat_id")
+    chat_id = app.bot_data.get("chat_id")
 
     # Київщина + Київ -> група
     relevant_kyiv = [a for a in alerts if a.get("location_oblast") in {"Київська область", "м. Київ"}]
@@ -143,12 +109,15 @@ async def process_alerts(app, cache: RegionAlertCache):
             await app.bot.send_message(
                 chat_id=chat_id,
                 text=f"🚨 *{r}* — *{ALERT_TYPES_UA.get(t or 'air_raid', 'Повітряна тривога!')}*",
-                parse_mode="Markdown"
-            )
+                parse_mode="Markdown")
+
+
     # Київщина → група (відбої)
     for r in list(cache.last_alerts.keys()):
         if r not in new_state_kyiv and chat_id:
-            await app.bot.send_message(chat_id=chat_id, text=f"✅ Відбій тривоги у *{r}*", parse_mode="Markdown")
+            await app.bot.send_message(chat_id=chat_id,
+                 text=f"✅ Відбій тривоги у *{r}*", parse_mode="Markdown")
+
     # Загальний відбій у Київській
     if cache.last_alerts and not new_state_kyiv and chat_id:
         await app.bot.send_message(chat_id=chat_id, text=f"✅ Відбій тривоги у {REGION}")
@@ -307,9 +276,12 @@ async def handle_admin_number_choice(update: Update, context: ContextTypes.DEFAU
     """Адмін обирає область (крок 1) або район Київщини (крок 2)."""
     if update.effective_user.id != ADMIN_ID:
         return
+
     t = (update.message.text or "").strip()
+
     if not t.isdigit():
         return
+
     idx = int(t) - 1
     app_data = context.application.bot_data
 
@@ -362,117 +334,25 @@ async def handle_admin_number_choice(update: Update, context: ContextTypes.DEFAU
         return
 
 # ======================================================
-# 🔹 Команди /start, /help, /listregions, /exportdict, /stopbot
-# ======================================================
-async def start(update, ctx):
-    """Пуск і коротке зведення актуальних тривог адміну."""
-    ctx.application.bot_data["chat_id"] = update.effective_chat.id
-    await update.message.reply_text("Привіт 🌸 KytsjaAlarm запущено.\nОтримую поточні тривоги...")
-
-    data = await _get_api_data()
-    alerts = data.get("alerts", []) or []
-    if not alerts:
-        msg = "✅ Зараз по всій Україні спокійно."
-    else:
-        lines = []
-        for a in alerts:
-            t = a.get("alert_type") or "air_raid"
-            lines.append(
-                f"🚨 {a.get('location_oblast')} — {a.get('location_title')}: "
-                f"{ALERT_TYPES_UA.get(t, 'Повітряна тривога!')}"
-            )
-        msg = "🗺 <b>Актуальні тривоги:</b>\n" + "\n".join(lines)
-
-    await ctx.bot.send_message(chat_id=ADMIN_ID, text=msg, parse_mode="HTML")
-
-    if update.effective_chat.type in ("group", "supergroup"):
-        await update.message.reply_text("✅ Бот активний. Моніторю Київську область.")
-
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    help_text = (
-        "🧭 <b>Команди KytsjaAlarm Bot</b>\n\n"
-        "📍 <b>Основні:</b>\n"
-        "<code>/start</code> — запустити бота або перевірити стан\n"
-        "<code>/help</code> — показати цей список команд\n"
-        "<code>/stopbot</code> — зупинити бота (адміністратор)\n\n"
-        "📡 <b>Моніторинг і запити:</b>\n"
-        "<code>/listregions</code> — показати області, які бачить API\n"
-        "<code>/exportdict</code> — показати поточний словник назв (адміністратор)\n\n"
-        "🗺 <b>Текстові запити:</b>\n"
-        "«що по області» — Київська область\n"
-        "«що по Києву» — м. Київ\n"
-        "«як там Крим?» — Крим\n"
-        "«що по Франику» — Івано-Франківська область\n"
-        "«що по &lt;назві&gt;» — будь-який населений пункт зі словника\n\n"
-        "📩 Якщо боту невідомий пункт — він запитає, чи надіслати адміну для додавання."
-        "\n\n🐾 Версія: KytsjaAlarm v9.3.4 Final"
-    )
-    await update.message.reply_text(help_text, parse_mode="HTML")
-
-async def list_regions(update, ctx):
-    await update.message.reply_text("⏳ Отримую список областей...")
-    data = await _get_api_data()
-    regs = sorted(set(a.get("location_oblast") for a in (data.get("alerts", []) or []) if a.get("location_oblast")))
-    txt = "🧭 Список областей, які бачить API:\n\n" + "\n".join(f"• {r}" for r in regs) if regs else "❌ API не повернуло даних."
-    await update.message.reply_text(txt)
-
-async def export_dict(update, ctx):
-    if update.effective_user.id != ADMIN_ID:
-        return
-    data = ctx.application.bot_data.get("locations_dict", {})
-    await update.message.reply_text(f"<pre>{json.dumps(data, ensure_ascii=False, indent=2)}</pre>", parse_mode="HTML")
-
-# ======================================================
-# 🛑 ВИПРАВЛЕНА ФУНКЦІЯ ЗУПИНКИ 🛑
-# ======================================================
-async def stopbot(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        await update.message.reply_text("⛔️ Лише адміністратор.")
-        return
-    
-    await update.message.reply_text("🛑 Зупиняю роботу...")
-    
-    try:
-        # Надійна зупинка JobQueue
-        if ctx.application.job_queue:
-            await ctx.application.job_queue.stop()
-            
-        # Основний метод завершення роботи (уникає NoneType помилок)
-        await ctx.application.shutdown() 
-        
-        # Надсилаємо підтвердження
-        await update.message.reply_text("✅ KytsjaAlarm повністю зупинено.")
-        logging.info("🛑 Бот зупинено адміністратором.")
-        
-    except Exception as e:
-        # Обробляємо помилки, якщо не вдалося коректно вимкнутися
-        logging.error(f"Помилка при зупинці: {e}")
-        await update.message.reply_text(f"⚠️ Не вдалося завершити повністю: {e}")
-        
-    # Примусово завершуємо процес, щоб вийти з loop.run_forever()
-    os._exit(0) 
-
-# ======================================================
 # 🔹 Основний цикл
 # ======================================================
 async def main():
     nest_asyncio.apply()
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    if DEFAULT_CHAT_ID:
-        app.bot_data["chat_id"] = DEFAULT_CHAT_ID
-        app.bot_data["default_chat_id"] = DEFAULT_CHAT_ID
+    app.bot_data["chat_id"] = DEFAULT_CHAT_ID
+    app.bot_data["default_chat_id"] = DEFAULT_CHAT_ID
 
     cache = RegionAlertCache()
     app.bot_data["alert_cache"] = cache
     app.bot_data["locations_dict"] = load_locations_dict()
 
     # Команди
-    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("start", startbot_command))
     app.add_handler(CommandHandler("help", help_command))
-    app.add_handler(CommandHandler("stopbot", stopbot)) # ВИКОРИСТОВУЄМО ВИПРАВЛЕНУ
-    app.add_handler(CommandHandler("listregions", list_regions))
-    app.add_handler(CommandHandler("exportdict", export_dict))
+    app.add_handler(CommandHandler("stop", stopbot_command))
+    app.add_handler(CommandHandler("listregions", listregions_command))
+    app.add_handler(CommandHandler("exportdict", exportdict_command))
 
     # Ручні запити (фрази)
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex("(?i)що по області"), oblast_alerts))
@@ -496,7 +376,7 @@ async def main():
         await process_alerts(ctx.application, cache)
 
     app.job_queue.run_repeating(_poll, interval=POLL_INTERVAL, first=0)
-    await app.run_polling(close_loop=False)
+    await app.run_polling(close_loop=True)
 
 # ======================================================
 # 🔹 Запуск
@@ -505,3 +385,4 @@ if __name__ == "__main__":
     loop = asyncio.get_event_loop()
     loop.create_task(main())
     loop.run_forever()
+
