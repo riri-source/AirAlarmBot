@@ -27,7 +27,7 @@ async def startbot_command(update, ctx):
 
     data = await get_api_data()
     updates = await get_api_updates()
-    await update.message.reply_text("Привіт 🌸 KytsjaAlarm запущено.\n\
+    await update.message.reply_text(f"Привіт 🌸 KytsjaAlarm запущено.\n\
             Отримую поточні тривоги...\n{updates}")
 
     alerts = data.get("alerts", []) or []
