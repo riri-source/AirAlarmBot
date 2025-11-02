@@ -86,7 +86,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "«що по Франику» — Івано-Франківська область\n"
         "«що по &lt;назві&gt;» — будь-який населений пункт зі словника\n\n"
         "📩 Якщо боту невідомий пункт — він запитає, чи надіслати адміну для додавання."
-        "\n\n🐾 Версія: KytsjaAlarm v9.3.4 Final"
+        "\n\n🐾 Версія: KytsjaAlarm v9.4.0 Final"
     )
     await update.message.reply_text(help_text, parse_mode="HTML")
 
