@@ -24,11 +24,12 @@ async def get_api_updates():
 async def startbot_command(update, ctx):
     """Пуск і коротке зведення актуальних тривог адміну."""
     ctx.application.bot_data["chat_id"] = update.effective_chat.id
-    await update.message.reply_text("Привіт 🌸 KytsjaAlarm запущено.\n\
-            Отримую поточні тривоги...")
 
     data = await get_api_data()
     updates = await get_api_updates()
+    await update.message.reply_text("Привіт 🌸 KytsjaAlarm запущено.\n\
+            Отримую поточні тривоги...\n{updates}")
+
     alerts = data.get("alerts", []) or []
     if not alerts:
         msg = "✅ Зараз по всій Україні спокійно."
