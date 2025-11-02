@@ -424,7 +424,7 @@ async def main():
         await process_alerts(ctx.application, cache)
 
     app.job_queue.run_repeating(_poll, interval=POLL_INTERVAL, first=0)
-    await app.run_polling(close_loop=False)
+    await app.run_polling(close_loop=True)
 
 # ======================================================
 # 🔹 Запуск

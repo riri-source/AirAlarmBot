@@ -5,7 +5,6 @@ from telegram import Update
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 )
-
 from config import *
 
 async def stopbot(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
