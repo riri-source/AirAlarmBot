@@ -15,12 +15,6 @@ async def get_api_data():
         async with s.get(API_URL, headers=headers, timeout=10) as r:
             return await r.json()
 
-async def get_api_updates():
-    headers = {"Authorization": f"Bearer {ALERTS_TOKEN}"}
-    async with aiohttp.ClientSession() as s:
-        async with s.get(API_UPDATES_URL, headers=headers, timeout=20) as r:
-            return await r.text()
-
 async def startbot_command(update, ctx):
     """Пуск і коротке зведення актуальних тривог адміну."""
     ctx.application.bot_data["chat_id"] = update.effective_chat.id
