@@ -90,7 +90,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def listregions_command(update, ctx):
     await update.message.reply_text("⏳ Отримую список областей...")
 
-    data = await _get_api_data()
+    data = await get_api_data()
     regs = sorted(set(a.get("location_oblast") for a in (
         data.get("alerts", []) or []) if a.get("location_oblast")))
     txt = "🧭 Список областей, які бачить API:\n\n" + "\n".join(
